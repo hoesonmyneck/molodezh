@@ -29,9 +29,9 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     age_histogram: dict[int, int] = defaultdict(int)
 
     STATUS_KEYS = [
-        "РАБОТАЮЩИЕ", "ДЕТИ ДО 18 ЛЕТ", "НЕОХВАЧЕННЫЕ",
+        "РАБОТАЮЩИЕ", "ДЕТИ ОТ 14 ДО 18 ЛЕТ", "НЕОХВАЧЕННЫЕ",
         "СТУДЕНТ", "ИП", "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3",
-        "МНОГОДЕТНЫЕ", "ЛСИ", "ИНОСТРАННЫЕ ГРАЖДАНЕ",
+        "ЛСИ", "ИНОСТРАННЫЕ ГРАЖДАНЕ",
         "БЕЗРАБОТНЫЕ", "БЕРЕМЕННЫЕ", "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ",
     ]
     status_counts: dict[str, int] = {k: 0 for k in STATUS_KEYS}
@@ -112,7 +112,7 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 for age_val, cnt in ages_raw.value_counts().items():
                     age_histogram[int(age_val)] += int(cnt)
                 age_under18 = pd.to_numeric(df.get("VOZRAST", pd.Series(dtype=float)), errors="coerce") < 18
-                status_counts["ДЕТИ ДО 18 ЛЕТ"] += int(age_under18.sum())
+                status_counts["ДЕТИ ОТ 14 ДО 18 ЛЕТ"] += int(age_under18.sum())
                 for grp, lo, hi in age_group_ranges:
                     age_group_counts[grp] += int(((ages_raw >= lo) & (ages_raw <= hi)).sum())
 
