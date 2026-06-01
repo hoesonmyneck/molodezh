@@ -109,3 +109,15 @@ class NationalityStats(Base):
     session_id = Column(Integer, ForeignKey("upload_sessions.id"))
     nationality = Column(String)
     count = Column(Integer, default=0)
+
+
+class CrossStats(Base):
+    """Cross-tabulation for reactive filtering: filter_dim × filter_val → stat breakdown."""
+    __tablename__ = "cross_stats"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    filter_dim = Column(String, index=True)  # 'status' | 'age_group'
+    filter_val = Column(String, index=True)  # e.g. 'СТУДЕНТ' | '14-17'
+    stat_dim = Column(String)               # 'kpi' | 'status' | 'region' | 'gender' | 'cat' | 'age_group'
+    stat_key = Column(String)               # e.g. 'total' | 'РАБОТАЮЩИЕ' | 'Мужской'
+    value = Column(Float, default=0)

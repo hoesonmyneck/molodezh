@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import (
-    AgeDistribution, Categorization, DistrictBreakdown,
+    AgeDistribution, Categorization, CrossStats, DistrictBreakdown,
     GenderStats, KpiStats, NationalityStats, OkvedStats,
     RegionBreakdown, StatusBreakdown, UploadSession, User,
 )
@@ -351,6 +351,125 @@ def get_okved(db: Session = Depends(get_db), _: User = Depends(get_current_user)
         .all()
     )
     return [{"name": r.okved_name, "count": r.count} for r in rows]
+
+
+@app.get("/api/data/filter")
+def get_filtered_data(
+    dim: str,
+    val: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    sid = get_active_session_id(db)
+    if not sid:
+        return {"no_data": True}
+
+    rows = (
+        db.query(CrossStats)
+        .filter(
+            CrossStats.session_id == sid,
+            CrossStats.filter_dim == dim,
+            CrossStats.filter_val == val,
+        )
+        .all()
+    )
+    if not rows:
+        return {"no_data": True}
+
+    kpi_raw: dict = {}
+    statuses: dict = {}
+    regions: dict = {}
+    gender: dict = {}
+    cats: dict = {}
+    age_groups: dict = {}
+
+    for row in rows:
+        if row.stat_dim == "kpi":
+            kpi_raw[row.stat_key] = row.value
+        elif row.stat_dim == "status":
+            statuses[row.stat_key] = int(row.value)
+        elif row.stat_dim == "region":
+            regions[row.stat_key] = int(row.value)
+        elif row.stat_dim == "gender":
+            gender[row.stat_key] = int(row.value)
+        elif row.stat_dim == "cat":
+            cats[row.stat_key] = int(row.value)
+        elif row.stat_dim == "age_group":
+            age_groups[row.stat_key] = int(row.value)
+
+    salary_s = kpi_raw.get("salary_sum", 0)
+    salary_c = kpi_raw.get("salary_count", 0)
+    age_s = kpi_raw.get("age_sum", 0)
+    age_c = kpi_raw.get("age_count", 0)
+
+    kpis = {
+        "total_persons": int(kpi_raw.get("total", 0)),
+        "working": int(kpi_raw.get("working", 0)),
+        "students": int(kpi_raw.get("students", 0)),
+        "tipo_count": int(kpi_raw.get("tipo", 0)),
+        "active_contracts": int(kpi_raw.get("active_contracts", 0)),
+        "avg_salary": round(salary_s / salary_c) if salary_c > 0 else 0,
+        "avg_age": round(age_s / age_c, 1) if age_c > 0 else 0,
+        "median_age": None,
+        # raw values for client-side multi-filter aggregation
+        "_salary_sum": salary_s,
+        "_salary_count": salary_c,
+        "_age_sum": age_s,
+        "_age_count": age_c,
+    }
+
+    # separate okved / nationality from generic stat_dims
+    okved: dict = {}
+    nationality: dict = {}
+
+    for row in rows:
+        if row.stat_dim == "okved":
+            okved[row.stat_key] = int(row.value)
+        elif row.stat_dim == "nationality":
+            nationality[row.stat_key] = int(row.value)
+
+    region_name_map = {}
+    if regions:
+        reg_rows = (
+            db.query(RegionBreakdown)
+            .filter(
+                RegionBreakdown.session_id == sid,
+                RegionBreakdown.region_code.in_(list(regions.keys())),
+            )
+            .all()
+        )
+        region_name_map = {r.region_code: r.region_name for r in reg_rows}
+
+    age_order = ["14-17", "18-24", "25-29", "30-35"]
+
+    return {
+        "kpis": kpis,
+        "statuses": [
+            {"name": k, "count": v}
+            for k, v in sorted(statuses.items(), key=lambda x: -x[1])
+        ],
+        "regions": [
+            {"code": k, "name": region_name_map.get(k, k), "count": v}
+            for k, v in sorted(regions.items(), key=lambda x: -x[1])
+        ],
+        "gender": [{"gender": k, "count": v} for k, v in gender.items()],
+        "categorization": [
+            {"category": k, "count": v}
+            for k, v in sorted(cats.items(), key=lambda x: -x[1])
+        ],
+        "age_groups": [
+            {"group": g, "count": age_groups.get(g, 0)}
+            for g in age_order
+        ],
+        "okved": [
+            {"name": k, "count": v}
+            for k, v in sorted(okved.items(), key=lambda x: -x[1])[:20]
+        ],
+        "nationality": [
+            {"nationality": k, "count": v}
+            for k, v in sorted(nationality.items(), key=lambda x: -x[1])[:20]
+        ],
+    }
 
 
 @app.get("/api/data/nationality")

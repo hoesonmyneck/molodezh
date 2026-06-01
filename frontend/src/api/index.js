@@ -45,3 +45,5 @@ export const getCategorization = () => api.get('/data/categorization')
 export const getGender = () => api.get('/data/gender')
 export const getOkved = () => api.get('/data/okved')
 export const getNationality = () => api.get('/data/nationality')
+export const getFiltered = (dim, val) =>
+  api.get('/data/filter', { params: { dim, val } })
