@@ -21,54 +21,6 @@ function fmt(n) {
   return Math.round(n).toLocaleString('ru-RU')
 }
 
-// ── Aggregation ──────────────────────────────────────────────────────────────
-function mergeResults(results) {
-  const kpis = {
-    total_persons: 0, working: 0, students: 0,
-    tipo_count: 0, active_contracts: 0,
-    _salary_sum: 0, _salary_count: 0,
-    _age_sum: 0, _age_count: 0,
-  }
-  const statuses = {}, regions = {}, gender = {}, cats = {}, age_groups = {}, okved = {}, nat = {}
-
-  for (const r of results) {
-    if (!r || r.no_data) continue
-    kpis.total_persons += r.kpis.total_persons || 0
-    kpis.working += r.kpis.working || 0
-    kpis.students += r.kpis.students || 0
-    kpis.tipo_count += r.kpis.tipo_count || 0
-    kpis.active_contracts += r.kpis.active_contracts || 0
-    kpis._salary_sum += r.kpis._salary_sum || 0
-    kpis._salary_count += r.kpis._salary_count || 0
-    kpis._age_sum += r.kpis._age_sum || 0
-    kpis._age_count += r.kpis._age_count || 0
-
-    for (const s of r.statuses || []) statuses[s.name] = (statuses[s.name] || 0) + s.count
-    for (const s of r.regions || []) {
-      regions[s.code] = { name: s.name, count: (regions[s.code]?.count || 0) + s.count }
-    }
-    for (const s of r.gender || []) gender[s.gender] = (gender[s.gender] || 0) + s.count
-    for (const s of r.categorization || []) cats[s.category] = (cats[s.category] || 0) + s.count
-    for (const s of r.age_groups || []) age_groups[s.group] = (age_groups[s.group] || 0) + s.count
-    for (const s of r.okved || []) okved[s.name] = (okved[s.name] || 0) + s.count
-    for (const s of r.nationality || []) nat[s.nationality] = (nat[s.nationality] || 0) + s.count
-  }
-
-  kpis.avg_salary = kpis._salary_count > 0 ? Math.round(kpis._salary_sum / kpis._salary_count) : 0
-  kpis.avg_age = kpis._age_count > 0 ? +(kpis._age_sum / kpis._age_count).toFixed(1) : 0
-
-  return {
-    kpis,
-    statuses: Object.entries(statuses).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
-    regions: Object.entries(regions).map(([code, { name, count }]) => ({ code, name, count })).sort((a, b) => b.count - a.count),
-    gender: Object.entries(gender).map(([g, count]) => ({ gender: g, count })),
-    categorization: Object.entries(cats).map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count),
-    age_groups: AGE_ORDER.map(g => ({ group: g, count: age_groups[g] || 0 })),
-    okved: Object.entries(okved).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 20),
-    nationality: Object.entries(nat).map(([nationality, count]) => ({ nationality, count })).sort((a, b) => b.count - a.count).slice(0, 20),
-  }
-}
-
 // ── Primitives ────────────────────────────────────────────────────────────────
 function Card({ children, style }) {
   return (
@@ -159,7 +111,7 @@ function FilterBanner({ filters, onRemove, onClear }) {
         </span>
       ))}
       {filters.length > 1 && (
-        <span style={{ fontSize: 10, color: 'var(--muted)', marginLeft: 4 }}>данные суммированы</span>
+        <span style={{ fontSize: 10, color: TEAL_DARK, marginLeft: 4, fontWeight: 600 }}>AND</span>
       )}
       <button onClick={onClear} style={{
         marginLeft: 'auto', border: 'none', background: 'transparent',
@@ -452,11 +404,12 @@ export default function Dashboard() {
   useEffect(() => {
     if (!activeFilters.length) { setFilteredData(null); return }
     setLoading(true)
-    Promise.all(activeFilters.map(f => getFiltered(f.dim, f.val).then(r => r.data).catch(() => null)))
-      .then(results => {
-        const valid = results.filter(r => r && !r.no_data)
-        setFilteredData(valid.length ? mergeResults(valid) : null)
+    getFiltered(activeFilters)
+      .then(r => {
+        const d = r.data
+        setFilteredData(d && !d.no_data ? d : null)
       })
+      .catch(() => setFilteredData(null))
       .finally(() => setLoading(false))
   }, [activeFilters])
 

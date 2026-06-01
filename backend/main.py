@@ -3,7 +3,7 @@ import threading
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import (
-    AgeDistribution, Categorization, CrossStats, DistrictBreakdown,
+    AgeDistribution, Categorization, DistrictBreakdown,
     GenderStats, KpiStats, NationalityStats, OkvedStats,
-    RegionBreakdown, StatusBreakdown, UploadSession, User,
+    PersonRecord, RegionBreakdown, StatusBreakdown, UploadSession, User,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -353,122 +353,192 @@ def get_okved(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     return [{"name": r.okved_name, "count": r.count} for r in rows]
 
 
+_STATUS_COL = {
+    "РАБОТАЮЩИЕ": "is_working",
+    "СТУДЕНТ": "is_student",
+    "ИП": "is_ip",
+    "ЛСИ": "is_lsi",
+    "БЕЗРАБОТНЫЕ": "is_unemployed",
+    "НЕОХВАЧЕННЫЕ": "is_uncovered",
+    "ДЕТИ ОТ 14 ДО 18 ЛЕТ": "is_under18",
+    "ИНОСТРАННЫЕ ГРАЖДАНЕ": "is_foreign",
+    "БЕРЕМЕННЫЕ": "is_pregnant",
+    "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3": "is_uhod",
+    "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": "is_berkut",
+}
+_DIM_COL = {
+    "region": "region_code",
+    "age_group": "age_group",
+    "gender": "gender",
+    "cat": "category",
+    "okved": "okved",
+    "nationality": "nationality",
+}
+
+
 @app.get("/api/data/filter")
 def get_filtered_data(
-    dim: str,
-    val: str,
+    f: List[str] = Query(default=[]),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
+    """AND-intersection filter. Each `f` param is "dim:val", e.g. f=region:ALA&f=age_group:18-24."""
     sid = get_active_session_id(db)
     if not sid:
         return {"no_data": True}
 
-    rows = (
-        db.query(CrossStats)
-        .filter(
-            CrossStats.session_id == sid,
-            CrossStats.filter_dim == dim,
-            CrossStats.filter_val == val,
-        )
-        .all()
-    )
-    if not rows:
+    filters = []
+    for item in f:
+        if ":" in item:
+            dim, val = item.split(":", 1)
+            filters.append((dim.strip(), val.strip()))
+
+    if not filters:
         return {"no_data": True}
 
-    kpi_raw: dict = {}
-    statuses: dict = {}
-    regions: dict = {}
-    gender: dict = {}
-    cats: dict = {}
-    age_groups: dict = {}
+    # Base query — apply every filter as AND
+    q = db.query(PersonRecord).filter(PersonRecord.session_id == sid)
+    for dim, val in filters:
+        if dim == "status":
+            col_name = _STATUS_COL.get(val)
+            if col_name:
+                q = q.filter(getattr(PersonRecord, col_name) == 1)
+        elif dim in _DIM_COL:
+            q = q.filter(getattr(PersonRecord, _DIM_COL[dim]) == val)
 
-    for row in rows:
-        if row.stat_dim == "kpi":
-            kpi_raw[row.stat_key] = row.value
-        elif row.stat_dim == "status":
-            statuses[row.stat_key] = int(row.value)
-        elif row.stat_dim == "region":
-            regions[row.stat_key] = int(row.value)
-        elif row.stat_dim == "gender":
-            gender[row.stat_key] = int(row.value)
-        elif row.stat_dim == "cat":
-            cats[row.stat_key] = int(row.value)
-        elif row.stat_dim == "age_group":
-            age_groups[row.stat_key] = int(row.value)
+    from sqlalchemy import func
 
-    salary_s = kpi_raw.get("salary_sum", 0)
-    salary_c = kpi_raw.get("salary_count", 0)
-    age_s = kpi_raw.get("age_sum", 0)
-    age_c = kpi_raw.get("age_count", 0)
+    # KPI aggregates (single query)
+    kpi = q.with_entities(
+        func.count().label("total"),
+        func.sum(PersonRecord.is_working).label("working"),
+        func.sum(PersonRecord.is_student).label("students"),
+        func.sum(PersonRecord.is_tipo).label("tipo"),
+        func.sum(PersonRecord.has_contract).label("contracts"),
+    ).first()
+
+    if not kpi or (kpi.total or 0) == 0:
+        return {"no_data": True}
+
+    # Salary / age need separate passes to avoid counting zeros
+    sal = q.filter(PersonRecord.salary > 0).with_entities(
+        func.sum(PersonRecord.salary).label("s"),
+        func.count().label("c"),
+    ).first()
+    salary_s = float(sal.s or 0)
+    salary_c = int(sal.c or 0)
+
+    ag = q.filter(PersonRecord.age_val > 0).with_entities(
+        func.sum(PersonRecord.age_val).label("s"),
+        func.count().label("c"),
+    ).first()
+    age_s = float(ag.s or 0)
+    age_c = int(ag.c or 0)
 
     kpis = {
-        "total_persons": int(kpi_raw.get("total", 0)),
-        "working": int(kpi_raw.get("working", 0)),
-        "students": int(kpi_raw.get("students", 0)),
-        "tipo_count": int(kpi_raw.get("tipo", 0)),
-        "active_contracts": int(kpi_raw.get("active_contracts", 0)),
+        "total_persons": int(kpi.total or 0),
+        "working": int(kpi.working or 0),
+        "students": int(kpi.students or 0),
+        "tipo_count": int(kpi.tipo or 0),
+        "active_contracts": int(kpi.contracts or 0),
         "avg_salary": round(salary_s / salary_c) if salary_c > 0 else 0,
         "avg_age": round(age_s / age_c, 1) if age_c > 0 else 0,
         "median_age": None,
-        # raw values for client-side multi-filter aggregation
-        "_salary_sum": salary_s,
-        "_salary_count": salary_c,
-        "_age_sum": age_s,
-        "_age_count": age_c,
     }
 
-    # separate okved / nationality from generic stat_dims
-    okved: dict = {}
-    nationality: dict = {}
+    # Status breakdown
+    st = q.with_entities(
+        func.sum(PersonRecord.is_working).label("working"),
+        func.sum(PersonRecord.is_student).label("student"),
+        func.sum(PersonRecord.is_ip).label("ip"),
+        func.sum(PersonRecord.is_lsi).label("lsi"),
+        func.sum(PersonRecord.is_unemployed).label("unemployed"),
+        func.sum(PersonRecord.is_uncovered).label("uncovered"),
+        func.sum(PersonRecord.is_under18).label("under18"),
+        func.sum(PersonRecord.is_foreign).label("foreign"),
+        func.sum(PersonRecord.is_pregnant).label("pregnant"),
+        func.sum(PersonRecord.is_uhod).label("uhod"),
+        func.sum(PersonRecord.is_berkut).label("berkut"),
+        func.sum(PersonRecord.is_tipo).label("tipo"),
+    ).first()
 
-    for row in rows:
-        if row.stat_dim == "okved":
-            okved[row.stat_key] = int(row.value)
-        elif row.stat_dim == "nationality":
-            nationality[row.stat_key] = int(row.value)
+    statuses_raw = {
+        "РАБОТАЮЩИЕ": int(st.working or 0),
+        "СТУДЕНТ": int(st.student or 0),
+        "ИП": int(st.ip or 0),
+        "ЛСИ": int(st.lsi or 0),
+        "БЕЗРАБОТНЫЕ": int(st.unemployed or 0),
+        "НЕОХВАЧЕННЫЕ": int(st.uncovered or 0),
+        "ДЕТИ ОТ 14 ДО 18 ЛЕТ": int(st.under18 or 0),
+        "ИНОСТРАННЫЕ ГРАЖДАНЕ": int(st.foreign or 0),
+        "БЕРЕМЕННЫЕ": int(st.pregnant or 0),
+        "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3": int(st.uhod or 0),
+        "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": int(st.berkut or 0),
+    }
 
-    region_name_map = {}
-    if regions:
-        reg_rows = (
-            db.query(RegionBreakdown)
-            .filter(
-                RegionBreakdown.session_id == sid,
-                RegionBreakdown.region_code.in_(list(regions.keys())),
-            )
-            .all()
-        )
-        region_name_map = {r.region_code: r.region_name for r in reg_rows}
+    # Breakdown queries (GROUP BY)
+    region_rows = (
+        q.with_entities(PersonRecord.region_code, PersonRecord.region_name, func.count().label("c"))
+        .group_by(PersonRecord.region_code, PersonRecord.region_name)
+        .order_by(func.count().desc())
+        .all()
+    )
+    gender_rows = (
+        q.with_entities(PersonRecord.gender, func.count().label("c"))
+        .group_by(PersonRecord.gender)
+        .all()
+    )
+    cat_rows = (
+        q.with_entities(PersonRecord.category, func.count().label("c"))
+        .group_by(PersonRecord.category)
+        .order_by(func.count().desc())
+        .all()
+    )
+    age_rows = (
+        q.with_entities(PersonRecord.age_group, func.count().label("c"))
+        .group_by(PersonRecord.age_group)
+        .all()
+    )
+    okved_rows = (
+        q.filter(PersonRecord.okved != "")
+        .with_entities(PersonRecord.okved, func.count().label("c"))
+        .group_by(PersonRecord.okved)
+        .order_by(func.count().desc())
+        .limit(20)
+        .all()
+    )
+    nat_rows = (
+        q.filter(PersonRecord.nationality != "")
+        .with_entities(PersonRecord.nationality, func.count().label("c"))
+        .group_by(PersonRecord.nationality)
+        .order_by(func.count().desc())
+        .limit(20)
+        .all()
+    )
 
     age_order = ["14-17", "18-24", "25-29", "30-35"]
+    age_map = {r.age_group: int(r.c) for r in age_rows}
 
     return {
         "kpis": kpis,
         "statuses": [
             {"name": k, "count": v}
-            for k, v in sorted(statuses.items(), key=lambda x: -x[1])
+            for k, v in sorted(statuses_raw.items(), key=lambda x: -x[1])
+            if v > 0
         ],
         "regions": [
-            {"code": k, "name": region_name_map.get(k, k), "count": v}
-            for k, v in sorted(regions.items(), key=lambda x: -x[1])
+            {"code": r.region_code, "name": r.region_name, "count": int(r.c)}
+            for r in region_rows
         ],
-        "gender": [{"gender": k, "count": v} for k, v in gender.items()],
+        "gender": [{"gender": r.gender, "count": int(r.c)} for r in gender_rows],
         "categorization": [
-            {"category": k, "count": v}
-            for k, v in sorted(cats.items(), key=lambda x: -x[1])
+            {"category": r.category, "count": int(r.c)} for r in cat_rows
         ],
         "age_groups": [
-            {"group": g, "count": age_groups.get(g, 0)}
-            for g in age_order
+            {"group": g, "count": age_map.get(g, 0)} for g in age_order
         ],
-        "okved": [
-            {"name": k, "count": v}
-            for k, v in sorted(okved.items(), key=lambda x: -x[1])[:20]
-        ],
-        "nationality": [
-            {"nationality": k, "count": v}
-            for k, v in sorted(nationality.items(), key=lambda x: -x[1])[:20]
-        ],
+        "okved": [{"name": r.okved, "count": int(r.c)} for r in okved_rows],
+        "nationality": [{"nationality": r.nationality, "count": int(r.c)} for r in nat_rows],
     }
 
 

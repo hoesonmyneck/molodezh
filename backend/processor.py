@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from models import (
     KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
     AgeDistribution, Categorization, GenderStats, OkvedStats,
-    NationalityStats, UploadSession, CrossStats,
+    NationalityStats, UploadSession, PersonRecord,
 )
 
 
@@ -15,64 +15,6 @@ def _update(db: Session, session_id: int, progress: int, current_file: str = "")
         {"progress": progress, "status": "processing", "current_file": current_file}
     )
     db.commit()
-
-
-def _cross(cross_counts, k, fmask, df, status_masks, ages_s, has_voz, age_group_ranges,
-           opv_mask, student_mask, tipo_flag, estab_mask):
-    """Accumulate cross-tab stats for one filter mask."""
-    n_f = int(fmask.sum())
-    if n_f == 0:
-        return
-
-    cross_counts[k + ("kpi", "total")] += n_f
-    cross_counts[k + ("kpi", "working")] += int((opv_mask & fmask).sum())
-    cross_counts[k + ("kpi", "students")] += int((student_mask & fmask).sum())
-    cross_counts[k + ("kpi", "tipo")] += int((tipo_flag & fmask).sum())
-    cross_counts[k + ("kpi", "active_contracts")] += int((estab_mask & fmask).sum())
-
-    if "SMZ_3M" in df.columns:
-        sal_f = pd.to_numeric(df.loc[fmask, "SMZ_3M"], errors="coerce").fillna(0).clip(lower=0)
-        cross_counts[k + ("kpi", "salary_sum")] += float(sal_f[sal_f > 0].sum())
-        cross_counts[k + ("kpi", "salary_count")] += int((sal_f > 0).sum())
-
-    if has_voz:
-        age_f = ages_s[fmask]
-        valid = age_f[age_f > 0]
-        cross_counts[k + ("kpi", "age_sum")] += float(valid.sum())
-        cross_counts[k + ("kpi", "age_count")] += len(valid)
-
-    for sname, smask in status_masks.items():
-        cross_counts[k + ("status", sname)] += int((fmask & smask).sum())
-
-    if "KATO_REG" in df.columns and "REGNAME" in df.columns:
-        for (code, name), cnt in df.loc[fmask, ["KATO_REG", "REGNAME"]].groupby(
-            ["KATO_REG", "REGNAME"]
-        ).size().items():
-            cross_counts[k + ("region", str(code))] += int(cnt)
-
-    if "GENDER" in df.columns:
-        for gen, cnt in df.loc[fmask, "GENDER"].fillna("Не указано").value_counts().items():
-            cross_counts[k + ("gender", str(gen))] += int(cnt)
-
-    if "SDU_TZHS" in df.columns:
-        for cat, cnt in df.loc[fmask, "SDU_TZHS"].fillna("Не указано").value_counts().items():
-            cross_counts[k + ("cat", str(cat))] += int(cnt)
-
-    if has_voz:
-        for grp, lo, hi in age_group_ranges:
-            cross_counts[k + ("age_group", grp)] += int(
-                ((ages_s[fmask] >= lo) & (ages_s[fmask] <= hi)).sum()
-            )
-
-    if "LVL1_NAME_RU" in df.columns:
-        for nm, cnt in df.loc[fmask, "LVL1_NAME_RU"].dropna().value_counts().items():
-            s = str(nm)
-            if s not in ("nan", "None"):
-                cross_counts[k + ("okved", s)] += int(cnt)
-
-    if "NATIONALTY" in df.columns:
-        for nat, cnt in df.loc[fmask, "NATIONALTY"].dropna().value_counts().items():
-            cross_counts[k + ("nationality", str(nat))] += int(cnt)
 
 
 def process_excel_files(session_id: int, file_paths: list, db: Session):
@@ -107,13 +49,11 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     okved_counts: dict[str, int] = defaultdict(int)
     nationality_counts: dict[str, int] = defaultdict(int)
 
-    cross_counts: dict[tuple, float] = defaultdict(float)
-
     total_files = len(file_paths)
 
     for file_idx, file_path in enumerate(file_paths):
         file_name = os.path.basename(file_path)
-        _update(db, session_id, int(file_idx / total_files * 80), file_name)
+        _update(db, session_id, int(file_idx / total_files * 85), file_name)
 
         try:
             xl = pd.ExcelFile(file_path)
@@ -232,65 +172,56 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 for nat, cnt in df["NATIONALTY"].dropna().value_counts().items():
                     nationality_counts[str(nat)] += int(cnt)
 
-            # ── Cross-tab ─────────────────────────────────────────────────────
-            status_masks = {
-                "РАБОТАЮЩИЕ": opv_mask, "ИП": ip_mask, "ЛСИ": lsi_mask,
-                "БЕРЕМЕННЫЕ": berem_mask, "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3": uhod_mask,
-                "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": berkut_mask, "СТУДЕНТ": student_mask,
-                "ИНОСТРАННЫЕ ГРАЖДАНЕ": foreign_mask,
-                "ДЕТИ ОТ 14 ДО 18 ЛЕТ": age_under18,
-                "НЕОХВАЧЕННЫЕ": uncov, "БЕЗРАБОТНЫЕ": unemployed,
-            }
-            args = (df, status_masks, ages_s, has_voz, age_group_ranges,
-                    opv_mask, student_mask, tipo_flag, estab_mask)
-
-            # Status filter dims
-            for nm, m in status_masks.items():
-                _cross(cross_counts, ("status", nm), m, *args)
-
-            # Age group filter dims
+            # ── PersonRecord rows for this sheet ──────────────────────────────
+            age_grp = pd.Series('', index=df.index)
             if has_voz:
                 for grp, lo, hi in age_group_ranges:
-                    _cross(cross_counts, ("age_group", grp),
-                           (ages_s >= lo) & (ages_s <= hi), *args)
+                    age_grp[(ages_s >= lo) & (ages_s <= hi)] = grp
 
-            # Region filter dims
-            if "KATO_REG" in df.columns:
-                reg_s = df["KATO_REG"].astype(str)
-                for code in reg_s.unique():
-                    if code not in ("nan", "None", ""):
-                        _cross(cross_counts, ("region", code),
-                               reg_s == code, *args)
+            reg_code = df["KATO_REG"].astype(str).fillna('') if "KATO_REG" in df.columns else pd.Series('', index=df.index)
+            reg_name = df["REGNAME"].astype(str).fillna('') if "REGNAME" in df.columns else pd.Series('', index=df.index)
+            gen_col = df["GENDER"].fillna('Не указано').astype(str) if "GENDER" in df.columns else pd.Series('Не указано', index=df.index)
+            cat_col = df["SDU_TZHS"].fillna('Не указано').astype(str) if "SDU_TZHS" in df.columns else pd.Series('Не указано', index=df.index)
+            okved_col = df["LVL1_NAME_RU"].fillna('').astype(str) if "LVL1_NAME_RU" in df.columns else pd.Series('', index=df.index)
+            nat_col = df["NATIONALTY"].fillna('').astype(str) if "NATIONALTY" in df.columns else pd.Series('', index=df.index)
+            sal_col = pd.to_numeric(df["SMZ_3M"], errors="coerce").fillna(0).clip(lower=0) if "SMZ_3M" in df.columns else pd.Series(0.0, index=df.index)
+            age_int = ages_s.astype(int) if has_voz else pd.Series(0, index=df.index)
 
-            # Gender filter dims
-            if "GENDER" in df.columns:
-                gen_s = df["GENDER"].fillna("Не указано")
-                for gen in gen_s.unique():
-                    _cross(cross_counts, ("gender", str(gen)),
-                           gen_s == gen, *args)
+            rec_df = pd.DataFrame({
+                "session_id": session_id,
+                "region_code": reg_code,
+                "region_name": reg_name,
+                "age_group": age_grp,
+                "gender": gen_col,
+                "category": cat_col,
+                "okved": okved_col,
+                "nationality": nat_col,
+                "is_working": opv_mask.astype(int),
+                "is_student": student_mask.astype(int),
+                "is_tipo": tipo_flag.astype(int),
+                "has_contract": estab_mask.astype(int),
+                "is_ip": ip_mask.astype(int),
+                "is_lsi": lsi_mask.astype(int),
+                "is_unemployed": unemployed.astype(int),
+                "is_uncovered": uncov.astype(int),
+                "is_under18": age_under18.astype(int),
+                "is_foreign": foreign_mask.astype(int),
+                "is_pregnant": berem_mask.astype(int),
+                "is_uhod": uhod_mask.astype(int),
+                "is_berkut": berkut_mask.astype(int),
+                "salary": sal_col,
+                "age_val": age_int,
+            })
 
-            # SDU_TZHS (category) filter dims
-            if "SDU_TZHS" in df.columns:
-                cat_s = df["SDU_TZHS"].fillna("Не указано")
-                for cat in cat_s.unique():
-                    _cross(cross_counts, ("cat", str(cat)),
-                           cat_s == cat, *args)
+            # Clean up sentinel strings from pandas
+            for col in ("region_code", "region_name", "gender", "category", "okved", "nationality", "age_group"):
+                rec_df[col] = rec_df[col].replace({"nan": "", "None": ""})
 
-            # OKVED filter dims
-            if "LVL1_NAME_RU" in df.columns:
-                ok_s = df["LVL1_NAME_RU"].astype(str)
-                for nm in ok_s.unique():
-                    if nm not in ("nan", "None", ""):
-                        _cross(cross_counts, ("okved", nm),
-                               ok_s == nm, *args)
-
-            # Nationality filter dims
-            if "NATIONALTY" in df.columns:
-                nat_s = df["NATIONALTY"].astype(str)
-                for nm in nat_s.unique():
-                    if nm not in ("nan", "None", ""):
-                        _cross(cross_counts, ("nationality", nm),
-                               nat_s == nm, *args)
+            records = rec_df.to_dict("records")
+            chunk = 5000
+            for i in range(0, len(records), chunk):
+                db.bulk_insert_mappings(PersonRecord, records[i:i + chunk])
+            db.commit()
 
     # ── Global derived stats ───────────────────────────────────────────────────
     age_total = sum(age_histogram.values())
@@ -338,37 +269,6 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     for nat, count in sorted(nationality_counts.items(), key=lambda x: -x[1])[:20]:
         db.add(NationalityStats(session_id=session_id, nationality=nat, count=count))
     db.commit()
-
-    # ── Save CrossStats ────────────────────────────────────────────────────────
-    _update(db, session_id, 90, "Сохранение перекрёстных таблиц...")
-
-    top20_ok = {k for k, _ in sorted(okved_counts.items(), key=lambda x: -x[1])[:20]}
-    top20_nat = {k for k, _ in sorted(nationality_counts.items(), key=lambda x: -x[1])[:20]}
-
-    batch = []
-    for (fdim, fval, sdim, skey), value in cross_counts.items():
-        if value == 0:
-            continue
-        if fdim == "okved" and fval not in top20_ok:
-            continue
-        if fdim == "nationality" and fval not in top20_nat:
-            continue
-        if sdim == "okved" and skey not in top20_ok:
-            continue
-        if sdim == "nationality" and skey not in top20_nat:
-            continue
-        batch.append(CrossStats(
-            session_id=session_id,
-            filter_dim=fdim, filter_val=fval,
-            stat_dim=sdim, stat_key=skey,
-            value=value,
-        ))
-
-    # Commit in chunks to avoid SQLite timeout on large batches
-    chunk_size = 500
-    for i in range(0, len(batch), chunk_size):
-        db.bulk_save_objects(batch[i:i + chunk_size])
-        db.commit()
 
     db.query(UploadSession).filter(UploadSession.id == session_id).update({
         "is_active": True, "status": "done", "progress": 100,

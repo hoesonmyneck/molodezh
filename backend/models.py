@@ -112,12 +112,41 @@ class NationalityStats(Base):
 
 
 class CrossStats(Base):
-    """Cross-tabulation for reactive filtering: filter_dim × filter_val → stat breakdown."""
+    """Legacy pre-computed cross-tabs (superseded by PersonRecord)."""
     __tablename__ = "cross_stats"
     id = Column(Integer, primary_key=True)
     session_id = Column(Integer, ForeignKey("upload_sessions.id"))
-    filter_dim = Column(String, index=True)  # 'status' | 'age_group'
-    filter_val = Column(String, index=True)  # e.g. 'СТУДЕНТ' | '14-17'
-    stat_dim = Column(String)               # 'kpi' | 'status' | 'region' | 'gender' | 'cat' | 'age_group'
-    stat_key = Column(String)               # e.g. 'total' | 'РАБОТАЮЩИЕ' | 'Мужской'
+    filter_dim = Column(String, index=True)
+    filter_val = Column(String, index=True)
+    stat_dim = Column(String)
+    stat_key = Column(String)
     value = Column(Float, default=0)
+
+
+class PersonRecord(Base):
+    """Individual-level record enabling AND-intersection multi-filter queries."""
+    __tablename__ = "person_records"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"), index=True)
+    region_code = Column(String(20), index=True, default='')
+    region_name = Column(String(120), default='')
+    age_group = Column(String(10), index=True, default='')
+    gender = Column(String(30), index=True, default='')
+    category = Column(String(60), index=True, default='')
+    okved = Column(String(220), index=True, default='')
+    nationality = Column(String(120), index=True, default='')
+    is_working = Column(Integer, default=0)
+    is_student = Column(Integer, default=0)
+    is_tipo = Column(Integer, default=0)
+    has_contract = Column(Integer, default=0)
+    is_ip = Column(Integer, default=0)
+    is_lsi = Column(Integer, default=0)
+    is_unemployed = Column(Integer, default=0)
+    is_uncovered = Column(Integer, default=0)
+    is_under18 = Column(Integer, default=0)
+    is_foreign = Column(Integer, default=0)
+    is_pregnant = Column(Integer, default=0)
+    is_uhod = Column(Integer, default=0)
+    is_berkut = Column(Integer, default=0)
+    salary = Column(Float, default=0.0)
+    age_val = Column(Integer, default=0)
