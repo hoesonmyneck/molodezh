@@ -16,13 +16,17 @@ from sqlalchemy.orm import Session
 from database import Base, engine, get_db
 from models import (
     AgeDistribution, Categorization, DistrictBreakdown,
-    GenderStats, KpiStats, MicroAgg, NationalityStats, OkvedStats,
+    GenderStats, KpiStats, MicroAgg, NatAgg, NationalityStats, OkvedAgg, OkvedStats,
     RegionBreakdown, StatusBreakdown, UploadSession, User,
 )
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Молодежь РК")
+
+# ── In-memory filter cache (cleared on reprocess/upload) ─────────────────────
+_filter_cache: dict = {}
+_filter_cache_lock = threading.Lock()
 
 app.add_middleware(
     CORSMiddleware,
@@ -193,6 +197,8 @@ async def upload_files(
         finally:
             db2.close()
 
+    with _filter_cache_lock:
+        _filter_cache.clear()
     threading.Thread(target=_run, daemon=True).start()
     return {"session_id": session.id, "files": len(files)}
 
@@ -240,10 +246,12 @@ def reprocess_session(
     if not file_paths:
         raise HTTPException(status_code=400, detail="Нет Excel-файлов в директории сессии")
 
-    # Clear existing aggregated data for this session
+    with _filter_cache_lock:
+        _filter_cache.clear()
+
     for model in [KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
                   AgeDistribution, Categorization, GenderStats, OkvedStats,
-                  NationalityStats, MicroAgg]:
+                  NationalityStats, MicroAgg, OkvedAgg, NatAgg]:
         db.query(model).filter(model.session_id == session_id).delete(synchronize_session=False)
     db.commit()
 
@@ -433,13 +441,55 @@ _DIM_COL = {
 }
 
 
+def _build_filtered_query(q, T, filters):
+    """Apply all filter dimensions as WHERE clauses to query on model T.
+    Returns (q, cnt_col) where cnt_col is total_count or a specific status count."""
+    cnt_col = T.total_count
+    for dim, val in filters:
+        if dim == "status":
+            col_name = _STATUS_COUNT_COL.get(val)
+            if col_name and hasattr(T, col_name):
+                cnt_col = getattr(T, col_name)
+        elif dim in _DIM_COL:
+            attr = _DIM_COL[dim]
+            if hasattr(T, attr):
+                q = q.filter(getattr(T, attr) == val)
+        elif dim == "age_exact":
+            try:
+                if hasattr(T, "age_val"):
+                    q = q.filter(T.age_val == int(val))
+            except (ValueError, TypeError):
+                pass
+        elif dim == "age_gte":
+            try:
+                v = int(val)
+                if hasattr(T, "age_val"):
+                    q = q.filter(T.age_val >= v, T.age_val > 0)
+            except (ValueError, TypeError):
+                pass
+        elif dim == "age_lte":
+            try:
+                v = int(val)
+                if hasattr(T, "age_val"):
+                    q = q.filter(T.age_val <= v, T.age_val > 0)
+            except (ValueError, TypeError):
+                pass
+        elif dim == "age_between":
+            try:
+                lo, hi = val.split(":")
+                if hasattr(T, "age_val"):
+                    q = q.filter(T.age_val >= int(lo), T.age_val <= int(hi), T.age_val > 0)
+            except Exception:
+                pass
+    return q, cnt_col
+
+
 @app.get("/api/data/filter")
 def get_filtered_data(
     f: List[str] = Query(default=[]),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """AND-intersection filter using MicroAgg. Each `f` param: "dim:val"."""
     sid = get_active_session_id(db)
     if not sid:
         return {"no_data": True}
@@ -449,47 +499,20 @@ def get_filtered_data(
         if ":" in item:
             dim, val = item.split(":", 1)
             filters.append((dim.strip(), val.strip()))
-
     if not filters:
         return {"no_data": True}
 
+    # ── Cache check ───────────────────────────────────────────────────────────
+    cache_key = (sid, tuple(sorted(f)))
+    with _filter_cache_lock:
+        if cache_key in _filter_cache:
+            return _filter_cache[cache_key]
+
     from sqlalchemy import func
 
-    q = db.query(MicroAgg).filter(MicroAgg.session_id == sid)
-    cnt_col = MicroAgg.total_count  # which column counts "matching" people
+    # ── Main query on MicroAgg ────────────────────────────────────────────────
+    q, cnt_col = _build_filtered_query(db.query(MicroAgg).filter(MicroAgg.session_id == sid), MicroAgg, filters)
 
-    for dim, val in filters:
-        if dim == "status":
-            col_name = _STATUS_COUNT_COL.get(val)
-            if col_name:
-                cnt_col = getattr(MicroAgg, col_name)
-        elif dim in _DIM_COL:
-            q = q.filter(getattr(MicroAgg, _DIM_COL[dim]) == val)
-        elif dim == "age_exact":
-            try:
-                q = q.filter(MicroAgg.age_val == int(val))
-            except (ValueError, TypeError):
-                pass
-        elif dim == "age_gte":
-            try:
-                v = int(val)
-                q = q.filter(MicroAgg.age_val >= v, MicroAgg.age_val > 0)
-            except (ValueError, TypeError):
-                pass
-        elif dim == "age_lte":
-            try:
-                v = int(val)
-                q = q.filter(MicroAgg.age_val <= v, MicroAgg.age_val > 0)
-            except (ValueError, TypeError):
-                pass
-        elif dim == "age_between":
-            try:
-                lo, hi = val.split(":")
-                q = q.filter(MicroAgg.age_val >= int(lo), MicroAgg.age_val <= int(hi), MicroAgg.age_val > 0)
-            except Exception:
-                pass
-
-    # Single KPI query with all sums
     kpi = q.with_entities(
         func.sum(cnt_col).label("total"),
         func.sum(MicroAgg.working_count).label("working"),
@@ -521,7 +544,6 @@ def get_filtered_data(
         "median_age": None,
     }
 
-    # Status breakdown — always show independent counts for the filtered set
     st = q.with_entities(
         func.sum(MicroAgg.working_count).label("working"),
         func.sum(MicroAgg.student_count).label("student"),
@@ -551,49 +573,48 @@ def get_filtered_data(
     }
 
     region_rows = (
-        q.with_entities(MicroAgg.region_code, MicroAgg.region_name,
-                        func.sum(cnt_col).label("c"))
+        q.with_entities(MicroAgg.region_code, MicroAgg.region_name, func.sum(cnt_col).label("c"))
         .group_by(MicroAgg.region_code, MicroAgg.region_name)
-        .order_by(func.sum(cnt_col).desc())
-        .all()
+        .order_by(func.sum(cnt_col).desc()).all()
     )
     gender_rows = (
         q.with_entities(MicroAgg.gender, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.gender)
-        .all()
+        .group_by(MicroAgg.gender).all()
     )
     cat_rows = (
         q.with_entities(MicroAgg.category, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.category)
-        .order_by(func.sum(cnt_col).desc())
-        .all()
+        .group_by(MicroAgg.category).order_by(func.sum(cnt_col).desc()).all()
     )
     age_rows = (
         q.with_entities(MicroAgg.age_group, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.age_group)
-        .all()
+        .group_by(MicroAgg.age_group).all()
     )
+
+    # ── OKVED and Nationality from their dedicated tables ─────────────────────
+    qo, cnt_col_o = _build_filtered_query(
+        db.query(OkvedAgg).filter(OkvedAgg.session_id == sid), OkvedAgg, filters)
     okved_rows = (
-        q.filter(MicroAgg.okved != "")
-        .with_entities(MicroAgg.okved, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.okved)
-        .order_by(func.sum(cnt_col).desc())
-        .limit(20)
-        .all()
+        qo.filter(OkvedAgg.okved != "")
+        .with_entities(OkvedAgg.okved, func.sum(cnt_col_o).label("c"))
+        .group_by(OkvedAgg.okved)
+        .order_by(func.sum(cnt_col_o).desc())
+        .limit(20).all()
     )
+
+    qn, cnt_col_n = _build_filtered_query(
+        db.query(NatAgg).filter(NatAgg.session_id == sid), NatAgg, filters)
     nat_rows = (
-        q.filter(MicroAgg.nationality != "")
-        .with_entities(MicroAgg.nationality, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.nationality)
-        .order_by(func.sum(cnt_col).desc())
-        .limit(20)
-        .all()
+        qn.filter(NatAgg.nationality != "")
+        .with_entities(NatAgg.nationality, func.sum(cnt_col_n).label("c"))
+        .group_by(NatAgg.nationality)
+        .order_by(func.sum(cnt_col_n).desc())
+        .limit(20).all()
     )
 
     age_order = ["14-17", "18-24", "25-29", "30-35"]
     age_map = {r.age_group: int(r.c) for r in age_rows}
 
-    return {
+    result = {
         "kpis": kpis,
         "statuses": [
             {"name": k, "count": v}
@@ -605,15 +626,15 @@ def get_filtered_data(
             for r in region_rows
         ],
         "gender": [{"gender": r.gender, "count": int(r.c)} for r in gender_rows],
-        "categorization": [
-            {"category": r.category, "count": int(r.c)} for r in cat_rows
-        ],
-        "age_groups": [
-            {"group": g, "count": age_map.get(g, 0)} for g in age_order
-        ],
+        "categorization": [{"category": r.category, "count": int(r.c)} for r in cat_rows],
+        "age_groups": [{"group": g, "count": age_map.get(g, 0)} for g in age_order],
         "okved": [{"name": r.okved, "count": int(r.c)} for r in okved_rows],
         "nationality": [{"nationality": r.nationality, "count": int(r.c)} for r in nat_rows],
     }
+
+    with _filter_cache_lock:
+        _filter_cache[cache_key] = result
+    return result
 
 
 @app.get("/api/data/nationality")

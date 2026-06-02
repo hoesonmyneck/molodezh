@@ -124,8 +124,8 @@ class CrossStats(Base):
 
 
 class MicroAgg(Base):
-    """Micro-aggregation: one row per unique (session, dimension-combo).
-    Status counts let the filter endpoint do fast SUM() instead of scanning every person row."""
+    """Core micro-aggregation (no okved/nationality — those are in OkvedAgg/NatAgg).
+    One row per unique (session, region, district, age_group, age_val, gender, category)."""
     __tablename__ = "micro_agg"
     id = Column(Integer, primary_key=True)
     session_id = Column(Integer, ForeignKey("upload_sessions.id"))
@@ -137,8 +137,6 @@ class MicroAgg(Base):
     age_val = Column(Integer, default=0)
     gender = Column(String(30), default='')
     category = Column(String(60), default='')
-    okved = Column(String(220), default='')
-    nationality = Column(String(120), default='')
     total_count = Column(Integer, default=0)
     working_count = Column(Integer, default=0)
     student_count = Column(Integer, default=0)
@@ -165,4 +163,70 @@ class MicroAgg(Base):
         Index('ix_micro_agg_sid_gen',  'session_id', 'gender'),
         Index('ix_micro_agg_sid_cat',  'session_id', 'category'),
         Index('ix_micro_agg_sid_aval', 'session_id', 'age_val'),
+    )
+
+
+class OkvedAgg(Base):
+    """OKVED breakdown aggregation. Grouped by core dims + okved."""
+    __tablename__ = "okved_agg"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    region_code = Column(String(20), default='')
+    district_code = Column(String(20), default='')
+    age_group = Column(String(10), default='')
+    age_val = Column(Integer, default=0)
+    gender = Column(String(30), default='')
+    category = Column(String(60), default='')
+    okved = Column(String(220), default='')
+    total_count = Column(Integer, default=0)
+    working_count = Column(Integer, default=0)
+    student_count = Column(Integer, default=0)
+    tipo_count = Column(Integer, default=0)
+    ip_count = Column(Integer, default=0)
+    lsi_count = Column(Integer, default=0)
+    unemployed_count = Column(Integer, default=0)
+    uncovered_count = Column(Integer, default=0)
+    under18_count = Column(Integer, default=0)
+    foreign_count = Column(Integer, default=0)
+    pregnant_count = Column(Integer, default=0)
+    uhod_count = Column(Integer, default=0)
+    berkut_count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index('ix_okved_agg_sid_reg',   'session_id', 'region_code'),
+        Index('ix_okved_agg_sid_dist',  'session_id', 'district_code'),
+        Index('ix_okved_agg_sid_okved', 'session_id', 'okved'),
+    )
+
+
+class NatAgg(Base):
+    """Nationality breakdown aggregation. Grouped by core dims + nationality."""
+    __tablename__ = "nat_agg"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    region_code = Column(String(20), default='')
+    district_code = Column(String(20), default='')
+    age_group = Column(String(10), default='')
+    age_val = Column(Integer, default=0)
+    gender = Column(String(30), default='')
+    category = Column(String(60), default='')
+    nationality = Column(String(120), default='')
+    total_count = Column(Integer, default=0)
+    working_count = Column(Integer, default=0)
+    student_count = Column(Integer, default=0)
+    tipo_count = Column(Integer, default=0)
+    ip_count = Column(Integer, default=0)
+    lsi_count = Column(Integer, default=0)
+    unemployed_count = Column(Integer, default=0)
+    uncovered_count = Column(Integer, default=0)
+    under18_count = Column(Integer, default=0)
+    foreign_count = Column(Integer, default=0)
+    pregnant_count = Column(Integer, default=0)
+    uhod_count = Column(Integer, default=0)
+    berkut_count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index('ix_nat_agg_sid_reg',  'session_id', 'region_code'),
+        Index('ix_nat_agg_sid_dist', 'session_id', 'district_code'),
+        Index('ix_nat_agg_sid_nat',  'session_id', 'nationality'),
     )

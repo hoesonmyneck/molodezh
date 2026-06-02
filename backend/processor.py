@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from models import (
     KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
     AgeDistribution, Categorization, GenderStats, OkvedStats,
-    NationalityStats, UploadSession, MicroAgg,
+    NationalityStats, UploadSession, MicroAgg, OkvedAgg, NatAgg,
 )
 
 
@@ -51,10 +51,14 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
 
     total_files = len(file_paths)
 
+    # MicroAgg: core dims only — okved/nationality live in separate tables
     _DIM_COLS = [
         "region_code", "region_name", "district_code", "district_name",
-        "age_group", "age_val", "gender", "category", "okved", "nationality",
+        "age_group", "age_val", "gender", "category",
     ]
+    _OKVED_DIM_COLS = ["region_code", "district_code", "age_group", "age_val", "gender", "category", "okved"]
+    _NAT_DIM_COLS   = ["region_code", "district_code", "age_group", "age_val", "gender", "category", "nationality"]
+
     _AGG_SPEC = {
         "_cnt": "sum", "is_working": "sum", "is_student": "sum", "is_tipo": "sum",
         "has_contract": "sum", "is_ip": "sum", "is_lsi": "sum",
@@ -62,7 +66,16 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         "is_foreign": "sum", "is_pregnant": "sum", "is_uhod": "sum", "is_berkut": "sum",
         "salary": "sum", "_sal_pos": "sum", "_age_sum": "sum", "_age_pos": "sum",
     }
+    # OkvedAgg/NatAgg don't need salary/age stats — status counts only
+    _ST_AGG_SPEC = {
+        "_cnt": "sum", "is_working": "sum", "is_student": "sum", "is_tipo": "sum",
+        "is_ip": "sum", "is_lsi": "sum", "is_unemployed": "sum", "is_uncovered": "sum",
+        "is_under18": "sum", "is_foreign": "sum", "is_pregnant": "sum",
+        "is_uhod": "sum", "is_berkut": "sum",
+    }
     agg_chunks: list = []
+    okved_chunks: list = []
+    nat_chunks: list = []
 
     for file_idx, file_path in enumerate(file_paths):
         file_name = os.path.basename(file_path)
@@ -250,31 +263,66 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             rec_df["_sal_pos"] = (rec_df["salary"] > 0).astype(int)
             rec_df["_age_pos"] = (rec_df["age_val"] > 0).astype(int)
             rec_df["_age_sum"] = rec_df["age_val"] * rec_df["_age_pos"]
-            grouped = rec_df.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC)
-            agg_chunks.append(grouped)
 
-    # ── Build MicroAgg from accumulated groupby chunks ────────────────────────
+            agg_chunks.append(rec_df.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC))
+
+            _okved_df = rec_df[rec_df["okved"] != ""]
+            if len(_okved_df):
+                okved_chunks.append(_okved_df.groupby(_OKVED_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
+
+            _nat_df = rec_df[rec_df["nationality"] != ""]
+            if len(_nat_df):
+                nat_chunks.append(_nat_df.groupby(_NAT_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
+
+    _ST_RENAME = {
+        "_cnt": "total_count",
+        "is_working": "working_count", "is_student": "student_count",
+        "is_tipo": "tipo_count", "is_ip": "ip_count", "is_lsi": "lsi_count",
+        "is_unemployed": "unemployed_count", "is_uncovered": "uncovered_count",
+        "is_under18": "under18_count", "is_foreign": "foreign_count",
+        "is_pregnant": "pregnant_count", "is_uhod": "uhod_count",
+        "is_berkut": "berkut_count",
+    }
+
+    # ── Build MicroAgg ────────────────────────────────────────────────────────
     if agg_chunks:
         combined = pd.concat(agg_chunks, ignore_index=True)
         final_agg = combined.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC)
         final_agg = final_agg.rename(columns={
-            "_cnt": "total_count",
-            "is_working": "working_count", "is_student": "student_count",
-            "is_tipo": "tipo_count", "has_contract": "contract_count",
-            "is_ip": "ip_count", "is_lsi": "lsi_count",
-            "is_unemployed": "unemployed_count", "is_uncovered": "uncovered_count",
-            "is_under18": "under18_count", "is_foreign": "foreign_count",
-            "is_pregnant": "pregnant_count", "is_uhod": "uhod_count",
-            "is_berkut": "berkut_count",
+            **_ST_RENAME,
+            "has_contract": "contract_count",
             "salary": "salary_sum", "_sal_pos": "salary_count",
             "_age_sum": "age_sum", "_age_pos": "age_count",
         })
         final_agg["session_id"] = session_id
         final_agg["age_val"] = final_agg["age_val"].astype(int)
-        micro_records = final_agg.to_dict("records")
-        chunk = 5000
-        for i in range(0, len(micro_records), chunk):
-            db.bulk_insert_mappings(MicroAgg, micro_records[i:i + chunk])
+        recs = final_agg.to_dict("records")
+        for i in range(0, len(recs), 5000):
+            db.bulk_insert_mappings(MicroAgg, recs[i:i + 5000])
+        db.commit()
+
+    # ── Build OkvedAgg ────────────────────────────────────────────────────────
+    if okved_chunks:
+        combined_o = pd.concat(okved_chunks, ignore_index=True)
+        final_o = combined_o.groupby(_OKVED_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC)
+        final_o = final_o.rename(columns=_ST_RENAME)
+        final_o["session_id"] = session_id
+        final_o["age_val"] = final_o["age_val"].astype(int)
+        recs_o = final_o.to_dict("records")
+        for i in range(0, len(recs_o), 5000):
+            db.bulk_insert_mappings(OkvedAgg, recs_o[i:i + 5000])
+        db.commit()
+
+    # ── Build NatAgg ──────────────────────────────────────────────────────────
+    if nat_chunks:
+        combined_n = pd.concat(nat_chunks, ignore_index=True)
+        final_n = combined_n.groupby(_NAT_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC)
+        final_n = final_n.rename(columns=_ST_RENAME)
+        final_n["session_id"] = session_id
+        final_n["age_val"] = final_n["age_val"].astype(int)
+        recs_n = final_n.to_dict("records")
+        for i in range(0, len(recs_n), 5000):
+            db.bulk_insert_mappings(NatAgg, recs_n[i:i + 5000])
         db.commit()
 
     # ── Global derived stats ───────────────────────────────────────────────────
