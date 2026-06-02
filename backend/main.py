@@ -441,6 +441,16 @@ _DIM_COL = {
 }
 
 
+def _get_primary_table(filters, sid, db):
+    """Route to OkvedAgg/NatAgg when those dims are in the filter list."""
+    for dim, _ in filters:
+        if dim == "okved":
+            return OkvedAgg, db.query(OkvedAgg).filter(OkvedAgg.session_id == sid)
+        if dim == "nationality":
+            return NatAgg, db.query(NatAgg).filter(NatAgg.session_id == sid)
+    return MicroAgg, db.query(MicroAgg).filter(MicroAgg.session_id == sid)
+
+
 def _build_filtered_query(q, T, filters):
     """Apply all filter dimensions as WHERE clauses to query on model T.
     Returns (q, cnt_col) where cnt_col is total_count or a specific status count."""
@@ -510,19 +520,21 @@ def get_filtered_data(
 
     from sqlalchemy import func
 
-    # ── Main query on MicroAgg ────────────────────────────────────────────────
-    q, cnt_col = _build_filtered_query(db.query(MicroAgg).filter(MicroAgg.session_id == sid), MicroAgg, filters)
+    # ── Primary table: MicroAgg normally; OkvedAgg/NatAgg when that dim is filtered ──
+    T, base_q = _get_primary_table(filters, sid, db)
+    q, cnt_col = _build_filtered_query(base_q, T, filters)
+    c = lambda name: getattr(T, name)  # noqa: E731
 
     kpi = q.with_entities(
         func.sum(cnt_col).label("total"),
-        func.sum(MicroAgg.working_count).label("working"),
-        func.sum(MicroAgg.student_count).label("students"),
-        func.sum(MicroAgg.tipo_count).label("tipo"),
-        func.sum(MicroAgg.contract_count).label("contracts"),
-        func.sum(MicroAgg.salary_sum).label("sal_sum"),
-        func.sum(MicroAgg.salary_count).label("sal_cnt"),
-        func.sum(MicroAgg.age_sum).label("age_sum"),
-        func.sum(MicroAgg.age_count).label("age_cnt"),
+        func.sum(c("working_count")).label("working"),
+        func.sum(c("student_count")).label("students"),
+        func.sum(c("tipo_count")).label("tipo"),
+        func.sum(c("contract_count")).label("contracts"),
+        func.sum(c("salary_sum")).label("sal_sum"),
+        func.sum(c("salary_count")).label("sal_cnt"),
+        func.sum(c("age_sum")).label("age_sum"),
+        func.sum(c("age_count")).label("age_cnt"),
     ).first()
 
     if not kpi or (kpi.total or 0) == 0:
@@ -545,17 +557,17 @@ def get_filtered_data(
     }
 
     st = q.with_entities(
-        func.sum(MicroAgg.working_count).label("working"),
-        func.sum(MicroAgg.student_count).label("student"),
-        func.sum(MicroAgg.ip_count).label("ip"),
-        func.sum(MicroAgg.lsi_count).label("lsi"),
-        func.sum(MicroAgg.unemployed_count).label("unemployed"),
-        func.sum(MicroAgg.uncovered_count).label("uncovered"),
-        func.sum(MicroAgg.under18_count).label("under18"),
-        func.sum(MicroAgg.foreign_count).label("foreign"),
-        func.sum(MicroAgg.pregnant_count).label("pregnant"),
-        func.sum(MicroAgg.uhod_count).label("uhod"),
-        func.sum(MicroAgg.berkut_count).label("berkut"),
+        func.sum(c("working_count")).label("working"),
+        func.sum(c("student_count")).label("student"),
+        func.sum(c("ip_count")).label("ip"),
+        func.sum(c("lsi_count")).label("lsi"),
+        func.sum(c("unemployed_count")).label("unemployed"),
+        func.sum(c("uncovered_count")).label("uncovered"),
+        func.sum(c("under18_count")).label("under18"),
+        func.sum(c("foreign_count")).label("foreign"),
+        func.sum(c("pregnant_count")).label("pregnant"),
+        func.sum(c("uhod_count")).label("uhod"),
+        func.sum(c("berkut_count")).label("berkut"),
     ).first()
 
     statuses_raw = {
@@ -573,24 +585,24 @@ def get_filtered_data(
     }
 
     region_rows = (
-        q.with_entities(MicroAgg.region_code, MicroAgg.region_name, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.region_code, MicroAgg.region_name)
+        q.with_entities(c("region_code"), c("region_name"), func.sum(cnt_col).label("c"))
+        .group_by(c("region_code"), c("region_name"))
         .order_by(func.sum(cnt_col).desc()).all()
     )
     gender_rows = (
-        q.with_entities(MicroAgg.gender, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.gender).all()
+        q.with_entities(c("gender"), func.sum(cnt_col).label("c"))
+        .group_by(c("gender")).all()
     )
     cat_rows = (
-        q.with_entities(MicroAgg.category, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.category).order_by(func.sum(cnt_col).desc()).all()
+        q.with_entities(c("category"), func.sum(cnt_col).label("c"))
+        .group_by(c("category")).order_by(func.sum(cnt_col).desc()).all()
     )
     age_rows = (
-        q.with_entities(MicroAgg.age_group, func.sum(cnt_col).label("c"))
-        .group_by(MicroAgg.age_group).all()
+        q.with_entities(c("age_group"), func.sum(cnt_col).label("c"))
+        .group_by(c("age_group")).all()
     )
 
-    # ── OKVED and Nationality from their dedicated tables ─────────────────────
+    # ── OKVED and Nationality always from their dedicated tables ─────────────
     qo, cnt_col_o = _build_filtered_query(
         db.query(OkvedAgg).filter(OkvedAgg.session_id == sid), OkvedAgg, filters)
     okved_rows = (

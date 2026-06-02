@@ -56,8 +56,8 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         "region_code", "region_name", "district_code", "district_name",
         "age_group", "age_val", "gender", "category",
     ]
-    _OKVED_DIM_COLS = ["region_code", "district_code", "age_group", "age_val", "gender", "category", "okved"]
-    _NAT_DIM_COLS   = ["region_code", "district_code", "age_group", "age_val", "gender", "category", "nationality"]
+    _OKVED_DIM_COLS = ["region_code", "region_name", "district_code", "age_group", "age_val", "gender", "category", "okved"]
+    _NAT_DIM_COLS   = ["region_code", "region_name", "district_code", "age_group", "age_val", "gender", "category", "nationality"]
 
     _AGG_SPEC = {
         "_cnt": "sum", "is_working": "sum", "is_student": "sum", "is_tipo": "sum",
@@ -66,12 +66,13 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         "is_foreign": "sum", "is_pregnant": "sum", "is_uhod": "sum", "is_berkut": "sum",
         "salary": "sum", "_sal_pos": "sum", "_age_sum": "sum", "_age_pos": "sum",
     }
-    # OkvedAgg/NatAgg don't need salary/age stats — status counts only
+    # OkvedAgg/NatAgg need full count set so they can act as primary filter table
     _ST_AGG_SPEC = {
         "_cnt": "sum", "is_working": "sum", "is_student": "sum", "is_tipo": "sum",
-        "is_ip": "sum", "is_lsi": "sum", "is_unemployed": "sum", "is_uncovered": "sum",
-        "is_under18": "sum", "is_foreign": "sum", "is_pregnant": "sum",
-        "is_uhod": "sum", "is_berkut": "sum",
+        "has_contract": "sum", "is_ip": "sum", "is_lsi": "sum",
+        "is_unemployed": "sum", "is_uncovered": "sum", "is_under18": "sum",
+        "is_foreign": "sum", "is_pregnant": "sum", "is_uhod": "sum", "is_berkut": "sum",
+        "salary": "sum", "_sal_pos": "sum", "_age_sum": "sum", "_age_pos": "sum",
     }
     agg_chunks: list = []
     okved_chunks: list = []
@@ -277,23 +278,21 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     _ST_RENAME = {
         "_cnt": "total_count",
         "is_working": "working_count", "is_student": "student_count",
-        "is_tipo": "tipo_count", "is_ip": "ip_count", "is_lsi": "lsi_count",
+        "is_tipo": "tipo_count", "has_contract": "contract_count",
+        "is_ip": "ip_count", "is_lsi": "lsi_count",
         "is_unemployed": "unemployed_count", "is_uncovered": "uncovered_count",
         "is_under18": "under18_count", "is_foreign": "foreign_count",
         "is_pregnant": "pregnant_count", "is_uhod": "uhod_count",
         "is_berkut": "berkut_count",
+        "salary": "salary_sum", "_sal_pos": "salary_count",
+        "_age_sum": "age_sum", "_age_pos": "age_count",
     }
 
     # ── Build MicroAgg ────────────────────────────────────────────────────────
     if agg_chunks:
         combined = pd.concat(agg_chunks, ignore_index=True)
         final_agg = combined.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC)
-        final_agg = final_agg.rename(columns={
-            **_ST_RENAME,
-            "has_contract": "contract_count",
-            "salary": "salary_sum", "_sal_pos": "salary_count",
-            "_age_sum": "age_sum", "_age_pos": "age_count",
-        })
+        final_agg = final_agg.rename(columns=_ST_RENAME)
         final_agg["session_id"] = session_id
         final_agg["age_val"] = final_agg["age_val"].astype(int)
         recs = final_agg.to_dict("records")

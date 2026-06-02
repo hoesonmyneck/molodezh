@@ -167,11 +167,12 @@ class MicroAgg(Base):
 
 
 class OkvedAgg(Base):
-    """OKVED breakdown aggregation. Grouped by core dims + okved."""
+    """OKVED aggregation — same count columns as MicroAgg so it can be used as primary table."""
     __tablename__ = "okved_agg"
     id = Column(Integer, primary_key=True)
     session_id = Column(Integer, ForeignKey("upload_sessions.id"))
     region_code = Column(String(20), default='')
+    region_name = Column(String(120), default='')
     district_code = Column(String(20), default='')
     age_group = Column(String(10), default='')
     age_val = Column(Integer, default=0)
@@ -182,6 +183,7 @@ class OkvedAgg(Base):
     working_count = Column(Integer, default=0)
     student_count = Column(Integer, default=0)
     tipo_count = Column(Integer, default=0)
+    contract_count = Column(Integer, default=0)
     ip_count = Column(Integer, default=0)
     lsi_count = Column(Integer, default=0)
     unemployed_count = Column(Integer, default=0)
@@ -191,6 +193,10 @@ class OkvedAgg(Base):
     pregnant_count = Column(Integer, default=0)
     uhod_count = Column(Integer, default=0)
     berkut_count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
+    age_sum = Column(Float, default=0.0)
+    age_count = Column(Integer, default=0)
 
     __table_args__ = (
         Index('ix_okved_agg_sid_reg',   'session_id', 'region_code'),
@@ -200,11 +206,12 @@ class OkvedAgg(Base):
 
 
 class NatAgg(Base):
-    """Nationality breakdown aggregation. Grouped by core dims + nationality."""
+    """Nationality aggregation — same count columns as MicroAgg so it can be used as primary table."""
     __tablename__ = "nat_agg"
     id = Column(Integer, primary_key=True)
     session_id = Column(Integer, ForeignKey("upload_sessions.id"))
     region_code = Column(String(20), default='')
+    region_name = Column(String(120), default='')
     district_code = Column(String(20), default='')
     age_group = Column(String(10), default='')
     age_val = Column(Integer, default=0)
@@ -215,6 +222,7 @@ class NatAgg(Base):
     working_count = Column(Integer, default=0)
     student_count = Column(Integer, default=0)
     tipo_count = Column(Integer, default=0)
+    contract_count = Column(Integer, default=0)
     ip_count = Column(Integer, default=0)
     lsi_count = Column(Integer, default=0)
     unemployed_count = Column(Integer, default=0)
@@ -224,6 +232,10 @@ class NatAgg(Base):
     pregnant_count = Column(Integer, default=0)
     uhod_count = Column(Integer, default=0)
     berkut_count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
+    age_sum = Column(Float, default=0.0)
+    age_count = Column(Integer, default=0)
 
     __table_args__ = (
         Index('ix_nat_agg_sid_reg',  'session_id', 'region_code'),
