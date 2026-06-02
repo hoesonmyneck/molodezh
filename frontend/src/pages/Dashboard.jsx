@@ -170,7 +170,8 @@ function StatusChart({ data, activeKeys, onToggle }) {
 function AgeBar({ data, activeKeys, onToggle }) {
   if (!data?.length) return <EmptyState />
   return (
-    <ResponsiveContainer width="100%" height={160}>
+    <div style={{ flex: 1, minHeight: 120 }}>
+    <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} barSize={32}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
         <XAxis dataKey="group" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -188,6 +189,7 @@ function AgeBar({ data, activeKeys, onToggle }) {
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+    </div>
   )
 }
 
@@ -483,13 +485,13 @@ export default function Dashboard({ globalFilters = [] }) {
           </>}
         </Card>
 
-        <Card style={{ padding: '16px 20px' }}>
+        <Card style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column' }}>
           <Tabs tabs={[
             { key: 'age', label: 'Возраст' },
             { key: 'gender', label: 'Пол' },
           ]} active={rightTab} onChange={setRightTab} />
 
-          {rightTab === 'age' && <>
+          {rightTab === 'age' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <SectionTitle>Распределение по возрасту — нажмите для фильтрации</SectionTitle>
             <AgeBar data={ageGroups} activeKeys={af} onToggle={toggleFilter} />
             {ageGroups.length > 0 && (
@@ -509,12 +511,14 @@ export default function Dashboard({ globalFilters = [] }) {
                 })}
               </div>
             )}
-          </>}
+          </div>}
 
-          {rightTab === 'gender' && <>
+          {rightTab === 'gender' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <SectionTitle>Распределение по полу — нажмите для фильтрации</SectionTitle>
-            <DonutChart data={gender} nameKey="gender" activeKeys={af} dimKey="gender" onToggle={toggleFilter} />
-            <div style={{ marginTop: 16, display: 'flex', gap: 12 }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+              <DonutChart data={gender} nameKey="gender" activeKeys={af} dimKey="gender" onToggle={toggleFilter} />
+            </div>
+            <div style={{ display: 'flex', gap: 12 }}>
               {gender.map((g) => {
                 const isActive = af.some(f => f.dim === 'gender' && f.val === g.gender)
                 return (
@@ -529,7 +533,7 @@ export default function Dashboard({ globalFilters = [] }) {
                 )
               })}
             </div>
-          </>}
+          </div>}
         </Card>
       </div>
 
