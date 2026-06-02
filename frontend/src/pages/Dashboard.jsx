@@ -12,7 +12,8 @@ import {
 const TEAL = '#147a80'
 const TEAL_DARK = '#0f5f64'
 const COLORS = ['#147a80', '#1a9099', '#22b8c4', '#0f5f64', '#2dd4bf', '#0891b2', '#0e7490', '#67e8f9']
-const CAT_COLORS = { A: '#ef4444', B: '#f97316', C: '#eab308', D: '#22c55e', 'Не указано': '#9ca3af' }
+const CAT_COLORS  = { A: '#22c55e', B: '#84cc16', C: '#eab308', D: '#f97316', E: '#ef4444', 'Не указано': '#9ca3af' }
+const CAT_LABELS  = { A: 'Отличный', B: 'Хороший', C: 'Средний', D: 'Критический', E: 'Экстренный' }
 
 const AGE_ORDER = ['14-17', '18-24', '25-29', '30-35']
 
@@ -215,7 +216,7 @@ function OkvedChart({ data, activeKeys, onToggle }) {
   )
 }
 
-function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, activeKeys, dimKey, onToggle }) {
+function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, labelMap, activeKeys, dimKey, onToggle }) {
   if (!data?.length) return <EmptyState />
   const total = data.reduce((s, d) => s + d[valueKey], 0)
   return (
@@ -244,7 +245,7 @@ function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, 
               style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, cursor: onToggle ? 'pointer' : 'default', borderRadius: 4, padding: '2px 4px', background: isActive ? '#e6f4f5' : 'transparent' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{ width: 10, height: 10, borderRadius: 2, background: isActive ? TEAL_DARK : baseColor }} />
-                <span style={{ color: '#374151' }}>{d[nameKey]}</span>
+                <span style={{ color: '#374151' }}>{labelMap?.[d[nameKey]] || d[nameKey]}</span>
               </div>
               <div style={{ fontWeight: 600, color: TEAL }}>{total ? ((d[valueKey] / total) * 100).toFixed(1) + '%' : '—'}</div>
             </div>
@@ -327,7 +328,7 @@ function NationalityTable({ data, activeKeys, onToggle }) {
 function CatTable({ data, activeKeys, onToggle }) {
   if (!data?.length) return null
   const total = data.reduce((s, d) => s + d.count, 0)
-  const labels = { A: 'Очень бедные', B: 'Бедные', C: 'Ниже среднего', D: 'Средние и выше', 'Не указано': 'Не указано' }
+  const labels = CAT_LABELS
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
       <thead>
@@ -543,7 +544,7 @@ export default function Dashboard({ globalFilters = [] }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
             <div>
               <SectionTitle>Категоризация домохозяйств — нажмите для фильтрации</SectionTitle>
-              <DonutChart data={cats} nameKey="category" colorMap={CAT_COLORS} activeKeys={af} dimKey="cat" onToggle={toggleFilter} />
+              <DonutChart data={cats} nameKey="category" colorMap={CAT_COLORS} labelMap={CAT_LABELS} activeKeys={af} dimKey="cat" onToggle={toggleFilter} />
             </div>
             <div>
               <SectionTitle>Таблица</SectionTitle>
