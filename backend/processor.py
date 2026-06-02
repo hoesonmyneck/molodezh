@@ -74,11 +74,24 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         "is_foreign": "sum", "is_pregnant": "sum", "is_uhod": "sum", "is_berkut": "sum",
         "salary": "sum", "_sal_pos": "sum", "_age_sum": "sum", "_age_pos": "sum",
     }
-    agg_chunks: list = []
-    okved_chunks: list = []
-    nat_chunks: list = []
+    _ST_RENAME = {
+        "_cnt": "total_count",
+        "is_working": "working_count", "is_student": "student_count",
+        "is_tipo": "tipo_count", "has_contract": "contract_count",
+        "is_ip": "ip_count", "is_lsi": "lsi_count",
+        "is_unemployed": "unemployed_count", "is_uncovered": "uncovered_count",
+        "is_under18": "under18_count", "is_foreign": "foreign_count",
+        "is_pregnant": "pregnant_count", "is_uhod": "uhod_count",
+        "is_berkut": "berkut_count",
+        "salary": "salary_sum", "_sal_pos": "salary_count",
+        "_age_sum": "age_sum", "_age_pos": "age_count",
+    }
 
     for file_idx, file_path in enumerate(file_paths):
+        # Reset per-file — keeps only one file's data in RAM at a time
+        agg_chunks: list = []
+        okved_chunks: list = []
+        nat_chunks: list = []
         file_name = os.path.basename(file_path)
         _update(db, session_id, int(file_idx / total_files * 85), file_name)
 
@@ -275,54 +288,23 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             if len(_nat_df):
                 nat_chunks.append(_nat_df.groupby(_NAT_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
 
-    _ST_RENAME = {
-        "_cnt": "total_count",
-        "is_working": "working_count", "is_student": "student_count",
-        "is_tipo": "tipo_count", "has_contract": "contract_count",
-        "is_ip": "ip_count", "is_lsi": "lsi_count",
-        "is_unemployed": "unemployed_count", "is_uncovered": "uncovered_count",
-        "is_under18": "under18_count", "is_foreign": "foreign_count",
-        "is_pregnant": "pregnant_count", "is_uhod": "uhod_count",
-        "is_berkut": "berkut_count",
-        "salary": "salary_sum", "_sal_pos": "salary_count",
-        "_age_sum": "age_sum", "_age_pos": "age_count",
-    }
+        # ── Insert this file's agg rows immediately; free RAM before next file ─
+        def _insert_agg(chunks, dim_cols, agg_spec, Model):
+            if not chunks:
+                return
+            combined = pd.concat(chunks, ignore_index=True)
+            final = combined.groupby(dim_cols, as_index=False, sort=False).agg(agg_spec)
+            final = final.rename(columns=_ST_RENAME)
+            final["session_id"] = session_id
+            final["age_val"] = final["age_val"].astype(int)
+            recs = final.to_dict("records")
+            for i in range(0, len(recs), 5000):
+                db.bulk_insert_mappings(Model, recs[i:i + 5000])
+            db.commit()
 
-    # ── Build MicroAgg ────────────────────────────────────────────────────────
-    if agg_chunks:
-        combined = pd.concat(agg_chunks, ignore_index=True)
-        final_agg = combined.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC)
-        final_agg = final_agg.rename(columns=_ST_RENAME)
-        final_agg["session_id"] = session_id
-        final_agg["age_val"] = final_agg["age_val"].astype(int)
-        recs = final_agg.to_dict("records")
-        for i in range(0, len(recs), 5000):
-            db.bulk_insert_mappings(MicroAgg, recs[i:i + 5000])
-        db.commit()
-
-    # ── Build OkvedAgg ────────────────────────────────────────────────────────
-    if okved_chunks:
-        combined_o = pd.concat(okved_chunks, ignore_index=True)
-        final_o = combined_o.groupby(_OKVED_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC)
-        final_o = final_o.rename(columns=_ST_RENAME)
-        final_o["session_id"] = session_id
-        final_o["age_val"] = final_o["age_val"].astype(int)
-        recs_o = final_o.to_dict("records")
-        for i in range(0, len(recs_o), 5000):
-            db.bulk_insert_mappings(OkvedAgg, recs_o[i:i + 5000])
-        db.commit()
-
-    # ── Build NatAgg ──────────────────────────────────────────────────────────
-    if nat_chunks:
-        combined_n = pd.concat(nat_chunks, ignore_index=True)
-        final_n = combined_n.groupby(_NAT_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC)
-        final_n = final_n.rename(columns=_ST_RENAME)
-        final_n["session_id"] = session_id
-        final_n["age_val"] = final_n["age_val"].astype(int)
-        recs_n = final_n.to_dict("records")
-        for i in range(0, len(recs_n), 5000):
-            db.bulk_insert_mappings(NatAgg, recs_n[i:i + 5000])
-        db.commit()
+        _insert_agg(agg_chunks,   _DIM_COLS,      _AGG_SPEC,    MicroAgg)
+        _insert_agg(okved_chunks, _OKVED_DIM_COLS, _ST_AGG_SPEC, OkvedAgg)
+        _insert_agg(nat_chunks,   _NAT_DIM_COLS,   _ST_AGG_SPEC, NatAgg)
 
     # ── Global derived stats ───────────────────────────────────────────────────
     age_total = sum(age_histogram.values())
