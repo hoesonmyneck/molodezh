@@ -376,7 +376,7 @@ function RegionsBarChart({ data }) {
 }
 
 // ── Main dashboard ─────────────────────────────────────────────────────────────
-export default function Dashboard() {
+export default function Dashboard({ globalFilters = [] }) {
   const [base, setBase] = useState({
     kpis: null, statuses: [], regions: [], ageGroups: [],
     cats: [], gender: [], okved: [], nationality: [],
@@ -402,16 +402,17 @@ export default function Dashboard() {
   useEffect(() => { loadBase() }, [loadBase])
 
   useEffect(() => {
-    if (!activeFilters.length) { setFilteredData(null); return }
+    const all = [...globalFilters, ...activeFilters]
+    if (!all.length) { setFilteredData(null); return }
     setLoading(true)
-    getFiltered(activeFilters)
+    getFiltered(all)
       .then(r => {
         const d = r.data
         setFilteredData(d && !d.no_data ? d : null)
       })
       .catch(() => setFilteredData(null))
       .finally(() => setLoading(false))
-  }, [activeFilters])
+  }, [globalFilters, activeFilters])
 
   const toggleFilter = (dim, val) => {
     setActiveFilters(prev => {
@@ -444,7 +445,7 @@ export default function Dashboard() {
         <KpiCard title="Количество ФЛ" main={kpis?.total_persons} />
         <KpiCard title="Работающие" main={kpis?.working} sub={kpis?.active_contracts} subLabel="Активный ТД" />
         <KpiCard title="Средняя ЗП" main={kpis?.avg_salary} />
-        <KpiCard title="Обучающиеся" main={kpis?.students} sub={kpis?.tipo_count} subLabel="ТИПО" />
+        <KpiCard title="ВУЗ" main={kpis?.students} sub={kpis?.tipo_count} subLabel="ТИПО" />
         <KpiCard
           title="Средний возраст"
           main={kpis?.avg_age != null ? Math.round(kpis.avg_age) : null}

@@ -8,6 +8,18 @@ DB_PATH = os.path.join(DATA_DIR, "molodezh.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+from sqlalchemy import event as _event
+
+@_event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_conn, _):
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA cache_size=-65536")    # 64 MB page cache
+    cur.execute("PRAGMA mmap_size=268435456")  # 256 MB mmap
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 class Base(DeclarativeBase):

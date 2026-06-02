@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   createUser, listUsers, deleteUser,
-  uploadFiles, getProgress, getSessions,
+  uploadFiles, getProgress, getSessions, reprocessSession,
 } from '../api'
 
 function Card({ children, style }) {
@@ -180,6 +180,20 @@ function UploadSection() {
     }, 2000)
   }
 
+  const handleReprocess = async (sid) => {
+    if (!confirm(`Перезапустить обработку сессии #${sid}? Текущие данные этой сессии будут удалены и пересчитаны.`)) return
+    setUploading(true)
+    setSessionId(sid)
+    setProgress({ status: 'processing', progress: 0, current_file: 'Перезапуск обработки...' })
+    try {
+      await reprocessSession(sid)
+      poll(sid)
+    } catch (ex) {
+      setProgress({ status: 'error', error_message: ex.response?.data?.detail || 'Ошибка перезапуска' })
+      setUploading(false)
+    }
+  }
+
   const handleUpload = async () => {
     if (!files.length) return
     setUploading(true)
@@ -290,6 +304,7 @@ function UploadSection() {
                 <th style={th}>Записей</th>
                 <th style={th}>Статус</th>
                 <th style={th}>Активная</th>
+                <th style={th}></th>
               </tr>
             </thead>
             <tbody>
@@ -304,6 +319,16 @@ function UploadSection() {
                     </span>
                   </td>
                   <td style={td}>{s.is_active ? '✓' : ''}</td>
+                  <td style={td}>
+                    <Btn
+                      variant="outline"
+                      style={{ padding: '4px 10px', fontSize: 11 }}
+                      disabled={uploading || s.status === 'processing'}
+                      onClick={() => handleReprocess(s.id)}
+                    >
+                      Перезапустить
+                    </Btn>
+                  </td>
                 </tr>
               ))}
             </tbody>

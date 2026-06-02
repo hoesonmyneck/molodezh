@@ -1,7 +1,171 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Admin from './pages/Admin'
+import { getRegions, getDistricts } from './api'
+
+const TEAL = '#147a80'
+
+const STATUS_OPTIONS = [
+  'РАБОТАЮЩИЕ', 'СТУДЕНТ', 'ИП', 'ЛСИ', 'БЕРЕМЕННЫЕ',
+  'ПО УХОДУ ЗА РЕБЕНКОМ ДО 3', 'ПО УХОДУ ЗА РЕБЕНКОМ ИНВ',
+  'ИНОСТРАННЫЕ ГРАЖДАНЕ', 'БЕЗРАБОТНЫЕ', 'НЕОХВАЧЕННЫЕ', 'ДЕТИ ОТ 14 ДО 18 ЛЕТ',
+]
+
+const AGE_OPTIONS = [
+  { value: '', label: 'Все возрасты' },
+  { value: 'group:14-17', label: '14–17 лет' },
+  { value: 'group:18-24', label: '18–24 лет' },
+  { value: 'group:25-29', label: '25–29 лет' },
+  { value: 'group:30-35', label: '30–35 лет' },
+  { value: 'lte:17', label: '< 18 лет' },
+  { value: 'gte:18', label: '≥ 18 лет' },
+  { value: 'gte:25', label: '≥ 25 лет' },
+  { value: 'between:14:18', label: '14–18 лет' },
+  { value: 'between:18:29', label: '18–29 лет' },
+  ...Array.from({ length: 22 }, (_, i) => ({
+    value: `exact:${14 + i}`,
+    label: `${14 + i} лет`,
+  })),
+]
+
+const selStyle = {
+  height: 28,
+  padding: '0 4px',
+  border: '1px solid #d1d5db',
+  borderRadius: 6,
+  fontSize: 12,
+  color: '#374151',
+  background: '#fff',
+  cursor: 'pointer',
+  maxWidth: 150,
+  minWidth: 90,
+}
+
+function parseGlobalFilters(obj) {
+  const filters = []
+  if (obj.region) filters.push({ dim: 'region', val: obj.region })
+  if (obj.district) filters.push({ dim: 'district', val: obj.district })
+  if (obj.gender) filters.push({ dim: 'gender', val: obj.gender })
+  if (obj.status) filters.push({ dim: 'status', val: obj.status })
+  if (obj.age) {
+    const [type, ...rest] = obj.age.split(':')
+    const val = rest.join(':')
+    if (type === 'group') filters.push({ dim: 'age_group', val })
+    else if (type === 'exact') filters.push({ dim: 'age_exact', val })
+    else if (type === 'gte') filters.push({ dim: 'age_gte', val })
+    else if (type === 'lte') filters.push({ dim: 'age_lte', val })
+    else if (type === 'between') filters.push({ dim: 'age_between', val })
+  }
+  return filters
+}
+
+function GlobalFilterBar({ onChange }) {
+  const [regions, setRegions] = useState([])
+  const [districts, setDistricts] = useState([])
+  const [sel, setSel] = useState({ region: '', district: '', gender: '', age: '', status: '' })
+
+  useEffect(() => {
+    getRegions().then(r => setRegions(r.data || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (sel.region) {
+      getDistricts(sel.region).then(r => setDistricts(r.data || [])).catch(() => {})
+    } else {
+      setDistricts([])
+    }
+  }, [sel.region])
+
+  const update = useCallback((key, val) => {
+    setSel(prev => {
+      const next = { ...prev, [key]: val }
+      if (key === 'region') next.district = ''
+      onChange(parseGlobalFilters(next))
+      return next
+    })
+  }, [onChange])
+
+  const reset = () => {
+    const empty = { region: '', district: '', gender: '', age: '', status: '' }
+    setSel(empty)
+    setDistricts([])
+    onChange([])
+  }
+
+  const hasAny = Object.values(sel).some(Boolean)
+
+  return (
+    <div style={{
+      background: '#f9fafb',
+      borderBottom: '1px solid #e5e7eb',
+      padding: '6px 24px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+    }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: .4, marginRight: 4 }}>
+        Фильтры:
+      </span>
+
+      {/* Region */}
+      <select style={selStyle} value={sel.region} onChange={e => update('region', e.target.value)}>
+        <option value="">Все регионы</option>
+        {regions.map(r => (
+          <option key={r.code} value={r.code}>{r.name}</option>
+        ))}
+      </select>
+
+      {/* District */}
+      <select
+        style={{ ...selStyle, opacity: sel.region ? 1 : 0.5 }}
+        value={sel.district}
+        disabled={!sel.region}
+        onChange={e => update('district', e.target.value)}
+      >
+        <option value="">Все районы</option>
+        {districts.map(d => (
+          <option key={d.district_code} value={d.district_code}>{d.district_name}</option>
+        ))}
+      </select>
+
+      {/* Gender */}
+      <select style={selStyle} value={sel.gender} onChange={e => update('gender', e.target.value)}>
+        <option value="">Все (пол)</option>
+        <option value="Мужской">Мужской</option>
+        <option value="Женский">Женский</option>
+      </select>
+
+      {/* Age */}
+      <select style={selStyle} value={sel.age} onChange={e => update('age', e.target.value)}>
+        {AGE_OPTIONS.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+
+      {/* Status */}
+      <select style={selStyle} value={sel.status} onChange={e => update('status', e.target.value)}>
+        <option value="">Все статусы</option>
+        {STATUS_OPTIONS.map(s => (
+          <option key={s} value={s}>{s}</option>
+        ))}
+      </select>
+
+      {hasAny && (
+        <button
+          onClick={reset}
+          style={{
+            background: 'transparent', border: 'none', color: TEAL,
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: '0 4px',
+          }}
+        >
+          Сбросить
+        </button>
+      )}
+    </div>
+  )
+}
 
 const NAV = {
   background: '#fff',
@@ -40,6 +204,7 @@ function NavBtn({ active, onClick, children }) {
 export default function App() {
   const [user, setUser] = useState(null)
   const [page, setPage] = useState('dashboard')
+  const [globalFilters, setGlobalFilters] = useState([])
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -82,7 +247,15 @@ export default function App() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-            {user.is_admin && <span style={{ background: 'var(--teal-light)', color: 'var(--teal)', padding: '2px 8px', borderRadius: 4, marginRight: 8, fontSize: 11, fontWeight: 600 }}>ADMIN</span>}
+            {user.is_admin && (
+              <span style={{
+                background: 'var(--teal-light)', color: 'var(--teal)',
+                padding: '2px 8px', borderRadius: 4, marginRight: 8,
+                fontSize: 11, fontWeight: 600,
+              }}>
+                ADMIN
+              </span>
+            )}
             {user.username}
           </span>
           <button
@@ -98,8 +271,17 @@ export default function App() {
         </div>
       </nav>
 
+      {page === 'dashboard' && (
+        <div style={{ position: 'sticky', top: 54, zIndex: 99 }}>
+          <GlobalFilterBar onChange={setGlobalFilters} />
+        </div>
+      )}
+
       <div style={{ padding: 20 }}>
-        {page === 'dashboard' ? <Dashboard /> : <Admin />}
+        {page === 'dashboard'
+          ? <Dashboard globalFilters={globalFilters} />
+          : <Admin />
+        }
       </div>
     </div>
   )

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Index, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
 from datetime import datetime
 from database import Base
 
@@ -112,7 +112,7 @@ class NationalityStats(Base):
 
 
 class CrossStats(Base):
-    """Legacy pre-computed cross-tabs (superseded by PersonRecord)."""
+    """Legacy pre-computed cross-tabs (superseded by MicroAgg)."""
     __tablename__ = "cross_stats"
     id = Column(Integer, primary_key=True)
     session_id = Column(Integer, ForeignKey("upload_sessions.id"))
@@ -123,30 +123,46 @@ class CrossStats(Base):
     value = Column(Float, default=0)
 
 
-class PersonRecord(Base):
-    """Individual-level record enabling AND-intersection multi-filter queries."""
-    __tablename__ = "person_records"
+class MicroAgg(Base):
+    """Micro-aggregation: one row per unique (session, dimension-combo).
+    Status counts let the filter endpoint do fast SUM() instead of scanning every person row."""
+    __tablename__ = "micro_agg"
     id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey("upload_sessions.id"), index=True)
-    region_code = Column(String(20), index=True, default='')
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    region_code = Column(String(20), default='')
     region_name = Column(String(120), default='')
-    age_group = Column(String(10), index=True, default='')
-    gender = Column(String(30), index=True, default='')
-    category = Column(String(60), index=True, default='')
-    okved = Column(String(220), index=True, default='')
-    nationality = Column(String(120), index=True, default='')
-    is_working = Column(Integer, default=0)
-    is_student = Column(Integer, default=0)
-    is_tipo = Column(Integer, default=0)
-    has_contract = Column(Integer, default=0)
-    is_ip = Column(Integer, default=0)
-    is_lsi = Column(Integer, default=0)
-    is_unemployed = Column(Integer, default=0)
-    is_uncovered = Column(Integer, default=0)
-    is_under18 = Column(Integer, default=0)
-    is_foreign = Column(Integer, default=0)
-    is_pregnant = Column(Integer, default=0)
-    is_uhod = Column(Integer, default=0)
-    is_berkut = Column(Integer, default=0)
-    salary = Column(Float, default=0.0)
+    district_code = Column(String(20), default='')
+    district_name = Column(String(120), default='')
+    age_group = Column(String(10), default='')
     age_val = Column(Integer, default=0)
+    gender = Column(String(30), default='')
+    category = Column(String(60), default='')
+    okved = Column(String(220), default='')
+    nationality = Column(String(120), default='')
+    total_count = Column(Integer, default=0)
+    working_count = Column(Integer, default=0)
+    student_count = Column(Integer, default=0)
+    tipo_count = Column(Integer, default=0)
+    contract_count = Column(Integer, default=0)
+    ip_count = Column(Integer, default=0)
+    lsi_count = Column(Integer, default=0)
+    unemployed_count = Column(Integer, default=0)
+    uncovered_count = Column(Integer, default=0)
+    under18_count = Column(Integer, default=0)
+    foreign_count = Column(Integer, default=0)
+    pregnant_count = Column(Integer, default=0)
+    uhod_count = Column(Integer, default=0)
+    berkut_count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
+    age_sum = Column(Float, default=0.0)
+    age_count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index('ix_micro_agg_sid_reg',  'session_id', 'region_code'),
+        Index('ix_micro_agg_sid_dist', 'session_id', 'district_code'),
+        Index('ix_micro_agg_sid_agrp', 'session_id', 'age_group'),
+        Index('ix_micro_agg_sid_gen',  'session_id', 'gender'),
+        Index('ix_micro_agg_sid_cat',  'session_id', 'category'),
+        Index('ix_micro_agg_sid_aval', 'session_id', 'age_val'),
+    )

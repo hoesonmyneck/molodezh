@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 from database import Base, engine, get_db
 from models import (
     AgeDistribution, Categorization, DistrictBreakdown,
-    GenderStats, KpiStats, NationalityStats, OkvedStats,
-    PersonRecord, RegionBreakdown, StatusBreakdown, UploadSession, User,
+    GenderStats, KpiStats, MicroAgg, NationalityStats, OkvedStats,
+    RegionBreakdown, StatusBreakdown, UploadSession, User,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -215,6 +215,62 @@ def upload_progress(
     }
 
 
+@app.post("/api/admin/reprocess/{session_id}")
+def reprocess_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Re-run processing on already-uploaded files without re-uploading from browser."""
+    sess = db.query(UploadSession).filter(UploadSession.id == session_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    if sess.status == "processing":
+        raise HTTPException(status_code=400, detail="Сессия уже обрабатывается")
+
+    session_dir = os.path.join(UPLOAD_DIR, str(session_id))
+    if not os.path.isdir(session_dir):
+        raise HTTPException(status_code=400, detail="Файлы сессии не найдены на диске")
+
+    file_paths = sorted([
+        os.path.join(session_dir, f)
+        for f in os.listdir(session_dir)
+        if f.lower().endswith((".xlsx", ".xls"))
+    ])
+    if not file_paths:
+        raise HTTPException(status_code=400, detail="Нет Excel-файлов в директории сессии")
+
+    # Clear existing aggregated data for this session
+    for model in [KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
+                  AgeDistribution, Categorization, GenderStats, OkvedStats,
+                  NationalityStats, MicroAgg]:
+        db.query(model).filter(model.session_id == session_id).delete(synchronize_session=False)
+    db.commit()
+
+    db.query(UploadSession).filter(UploadSession.id == session_id).update({
+        "status": "pending", "progress": 0, "current_file": "",
+        "is_active": False, "error_message": None, "total_records": 0,
+    })
+    db.commit()
+
+    def _run():
+        from database import SessionLocal
+        from processor import process_excel_files
+        db2 = SessionLocal()
+        try:
+            process_excel_files(session_id, file_paths, db2)
+        except Exception as exc:
+            db2.query(UploadSession).filter(UploadSession.id == session_id).update(
+                {"status": "error", "error_message": str(exc)[:500]}
+            )
+            db2.commit()
+        finally:
+            db2.close()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"session_id": session_id, "files": len(file_paths)}
+
+
 @app.get("/api/upload/sessions")
 def list_sessions(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     sessions = db.query(UploadSession).order_by(UploadSession.id.desc()).limit(10).all()
@@ -353,21 +409,22 @@ def get_okved(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     return [{"name": r.okved_name, "count": r.count} for r in rows]
 
 
-_STATUS_COL = {
-    "РАБОТАЮЩИЕ": "is_working",
-    "СТУДЕНТ": "is_student",
-    "ИП": "is_ip",
-    "ЛСИ": "is_lsi",
-    "БЕЗРАБОТНЫЕ": "is_unemployed",
-    "НЕОХВАЧЕННЫЕ": "is_uncovered",
-    "ДЕТИ ОТ 14 ДО 18 ЛЕТ": "is_under18",
-    "ИНОСТРАННЫЕ ГРАЖДАНЕ": "is_foreign",
-    "БЕРЕМЕННЫЕ": "is_pregnant",
-    "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3": "is_uhod",
-    "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": "is_berkut",
+_STATUS_COUNT_COL = {
+    "РАБОТАЮЩИЕ": "working_count",
+    "СТУДЕНТ": "student_count",
+    "ИП": "ip_count",
+    "ЛСИ": "lsi_count",
+    "БЕЗРАБОТНЫЕ": "unemployed_count",
+    "НЕОХВАЧЕННЫЕ": "uncovered_count",
+    "ДЕТИ ОТ 14 ДО 18 ЛЕТ": "under18_count",
+    "ИНОСТРАННЫЕ ГРАЖДАНЕ": "foreign_count",
+    "БЕРЕМЕННЫЕ": "pregnant_count",
+    "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3": "uhod_count",
+    "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": "berkut_count",
 }
 _DIM_COL = {
     "region": "region_code",
+    "district": "district_code",
     "age_group": "age_group",
     "gender": "gender",
     "cat": "category",
@@ -382,7 +439,7 @@ def get_filtered_data(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """AND-intersection filter. Each `f` param is "dim:val", e.g. f=region:ALA&f=age_group:18-24."""
+    """AND-intersection filter using MicroAgg. Each `f` param: "dim:val"."""
     sid = get_active_session_id(db)
     if not sid:
         return {"no_data": True}
@@ -396,44 +453,62 @@ def get_filtered_data(
     if not filters:
         return {"no_data": True}
 
-    # Base query — apply every filter as AND
-    q = db.query(PersonRecord).filter(PersonRecord.session_id == sid)
-    for dim, val in filters:
-        if dim == "status":
-            col_name = _STATUS_COL.get(val)
-            if col_name:
-                q = q.filter(getattr(PersonRecord, col_name) == 1)
-        elif dim in _DIM_COL:
-            q = q.filter(getattr(PersonRecord, _DIM_COL[dim]) == val)
-
     from sqlalchemy import func
 
-    # KPI aggregates (single query)
+    q = db.query(MicroAgg).filter(MicroAgg.session_id == sid)
+    cnt_col = MicroAgg.total_count  # which column counts "matching" people
+
+    for dim, val in filters:
+        if dim == "status":
+            col_name = _STATUS_COUNT_COL.get(val)
+            if col_name:
+                cnt_col = getattr(MicroAgg, col_name)
+        elif dim in _DIM_COL:
+            q = q.filter(getattr(MicroAgg, _DIM_COL[dim]) == val)
+        elif dim == "age_exact":
+            try:
+                q = q.filter(MicroAgg.age_val == int(val))
+            except (ValueError, TypeError):
+                pass
+        elif dim == "age_gte":
+            try:
+                v = int(val)
+                q = q.filter(MicroAgg.age_val >= v, MicroAgg.age_val > 0)
+            except (ValueError, TypeError):
+                pass
+        elif dim == "age_lte":
+            try:
+                v = int(val)
+                q = q.filter(MicroAgg.age_val <= v, MicroAgg.age_val > 0)
+            except (ValueError, TypeError):
+                pass
+        elif dim == "age_between":
+            try:
+                lo, hi = val.split(":")
+                q = q.filter(MicroAgg.age_val >= int(lo), MicroAgg.age_val <= int(hi), MicroAgg.age_val > 0)
+            except Exception:
+                pass
+
+    # Single KPI query with all sums
     kpi = q.with_entities(
-        func.count().label("total"),
-        func.sum(PersonRecord.is_working).label("working"),
-        func.sum(PersonRecord.is_student).label("students"),
-        func.sum(PersonRecord.is_tipo).label("tipo"),
-        func.sum(PersonRecord.has_contract).label("contracts"),
+        func.sum(cnt_col).label("total"),
+        func.sum(MicroAgg.working_count).label("working"),
+        func.sum(MicroAgg.student_count).label("students"),
+        func.sum(MicroAgg.tipo_count).label("tipo"),
+        func.sum(MicroAgg.contract_count).label("contracts"),
+        func.sum(MicroAgg.salary_sum).label("sal_sum"),
+        func.sum(MicroAgg.salary_count).label("sal_cnt"),
+        func.sum(MicroAgg.age_sum).label("age_sum"),
+        func.sum(MicroAgg.age_count).label("age_cnt"),
     ).first()
 
     if not kpi or (kpi.total or 0) == 0:
         return {"no_data": True}
 
-    # Salary / age need separate passes to avoid counting zeros
-    sal = q.filter(PersonRecord.salary > 0).with_entities(
-        func.sum(PersonRecord.salary).label("s"),
-        func.count().label("c"),
-    ).first()
-    salary_s = float(sal.s or 0)
-    salary_c = int(sal.c or 0)
-
-    ag = q.filter(PersonRecord.age_val > 0).with_entities(
-        func.sum(PersonRecord.age_val).label("s"),
-        func.count().label("c"),
-    ).first()
-    age_s = float(ag.s or 0)
-    age_c = int(ag.c or 0)
+    sal_s = float(kpi.sal_sum or 0)
+    sal_c = int(kpi.sal_cnt or 0)
+    age_s = float(kpi.age_sum or 0)
+    age_c = int(kpi.age_cnt or 0)
 
     kpis = {
         "total_persons": int(kpi.total or 0),
@@ -441,25 +516,24 @@ def get_filtered_data(
         "students": int(kpi.students or 0),
         "tipo_count": int(kpi.tipo or 0),
         "active_contracts": int(kpi.contracts or 0),
-        "avg_salary": round(salary_s / salary_c) if salary_c > 0 else 0,
+        "avg_salary": round(sal_s / sal_c) if sal_c > 0 else 0,
         "avg_age": round(age_s / age_c, 1) if age_c > 0 else 0,
         "median_age": None,
     }
 
-    # Status breakdown
+    # Status breakdown — always show independent counts for the filtered set
     st = q.with_entities(
-        func.sum(PersonRecord.is_working).label("working"),
-        func.sum(PersonRecord.is_student).label("student"),
-        func.sum(PersonRecord.is_ip).label("ip"),
-        func.sum(PersonRecord.is_lsi).label("lsi"),
-        func.sum(PersonRecord.is_unemployed).label("unemployed"),
-        func.sum(PersonRecord.is_uncovered).label("uncovered"),
-        func.sum(PersonRecord.is_under18).label("under18"),
-        func.sum(PersonRecord.is_foreign).label("foreign"),
-        func.sum(PersonRecord.is_pregnant).label("pregnant"),
-        func.sum(PersonRecord.is_uhod).label("uhod"),
-        func.sum(PersonRecord.is_berkut).label("berkut"),
-        func.sum(PersonRecord.is_tipo).label("tipo"),
+        func.sum(MicroAgg.working_count).label("working"),
+        func.sum(MicroAgg.student_count).label("student"),
+        func.sum(MicroAgg.ip_count).label("ip"),
+        func.sum(MicroAgg.lsi_count).label("lsi"),
+        func.sum(MicroAgg.unemployed_count).label("unemployed"),
+        func.sum(MicroAgg.uncovered_count).label("uncovered"),
+        func.sum(MicroAgg.under18_count).label("under18"),
+        func.sum(MicroAgg.foreign_count).label("foreign"),
+        func.sum(MicroAgg.pregnant_count).label("pregnant"),
+        func.sum(MicroAgg.uhod_count).label("uhod"),
+        func.sum(MicroAgg.berkut_count).label("berkut"),
     ).first()
 
     statuses_raw = {
@@ -476,42 +550,42 @@ def get_filtered_data(
         "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": int(st.berkut or 0),
     }
 
-    # Breakdown queries (GROUP BY)
     region_rows = (
-        q.with_entities(PersonRecord.region_code, PersonRecord.region_name, func.count().label("c"))
-        .group_by(PersonRecord.region_code, PersonRecord.region_name)
-        .order_by(func.count().desc())
+        q.with_entities(MicroAgg.region_code, MicroAgg.region_name,
+                        func.sum(cnt_col).label("c"))
+        .group_by(MicroAgg.region_code, MicroAgg.region_name)
+        .order_by(func.sum(cnt_col).desc())
         .all()
     )
     gender_rows = (
-        q.with_entities(PersonRecord.gender, func.count().label("c"))
-        .group_by(PersonRecord.gender)
+        q.with_entities(MicroAgg.gender, func.sum(cnt_col).label("c"))
+        .group_by(MicroAgg.gender)
         .all()
     )
     cat_rows = (
-        q.with_entities(PersonRecord.category, func.count().label("c"))
-        .group_by(PersonRecord.category)
-        .order_by(func.count().desc())
+        q.with_entities(MicroAgg.category, func.sum(cnt_col).label("c"))
+        .group_by(MicroAgg.category)
+        .order_by(func.sum(cnt_col).desc())
         .all()
     )
     age_rows = (
-        q.with_entities(PersonRecord.age_group, func.count().label("c"))
-        .group_by(PersonRecord.age_group)
+        q.with_entities(MicroAgg.age_group, func.sum(cnt_col).label("c"))
+        .group_by(MicroAgg.age_group)
         .all()
     )
     okved_rows = (
-        q.filter(PersonRecord.okved != "")
-        .with_entities(PersonRecord.okved, func.count().label("c"))
-        .group_by(PersonRecord.okved)
-        .order_by(func.count().desc())
+        q.filter(MicroAgg.okved != "")
+        .with_entities(MicroAgg.okved, func.sum(cnt_col).label("c"))
+        .group_by(MicroAgg.okved)
+        .order_by(func.sum(cnt_col).desc())
         .limit(20)
         .all()
     )
     nat_rows = (
-        q.filter(PersonRecord.nationality != "")
-        .with_entities(PersonRecord.nationality, func.count().label("c"))
-        .group_by(PersonRecord.nationality)
-        .order_by(func.count().desc())
+        q.filter(MicroAgg.nationality != "")
+        .with_entities(MicroAgg.nationality, func.sum(cnt_col).label("c"))
+        .group_by(MicroAgg.nationality)
+        .order_by(func.sum(cnt_col).desc())
         .limit(20)
         .all()
     )

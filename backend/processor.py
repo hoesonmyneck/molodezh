@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from models import (
     KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
     AgeDistribution, Categorization, GenderStats, OkvedStats,
-    NationalityStats, UploadSession, PersonRecord,
+    NationalityStats, UploadSession, MicroAgg,
 )
 
 
@@ -51,6 +51,19 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
 
     total_files = len(file_paths)
 
+    _DIM_COLS = [
+        "region_code", "region_name", "district_code", "district_name",
+        "age_group", "age_val", "gender", "category", "okved", "nationality",
+    ]
+    _AGG_SPEC = {
+        "_cnt": "sum", "is_working": "sum", "is_student": "sum", "is_tipo": "sum",
+        "has_contract": "sum", "is_ip": "sum", "is_lsi": "sum",
+        "is_unemployed": "sum", "is_uncovered": "sum", "is_under18": "sum",
+        "is_foreign": "sum", "is_pregnant": "sum", "is_uhod": "sum", "is_berkut": "sum",
+        "salary": "sum", "_sal_pos": "sum", "_age_sum": "sum", "_age_pos": "sum",
+    }
+    agg_chunks: list = []
+
     for file_idx, file_path in enumerate(file_paths):
         file_name = os.path.basename(file_path)
         _update(db, session_id, int(file_idx / total_files * 85), file_name)
@@ -83,7 +96,19 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             vuz_mask = flag("VUZ")
             school_mask = flag("SCHOOL")
             tipo_flag = flag("TIPO")
-            estab_mask = flag("ESTABLISHED_POST")
+
+            # Активный ТД: есть d_position_code и нет termination_date
+            if "d_position_code" in df.columns:
+                pos = df["d_position_code"].astype(str).str.strip()
+                pos_filled = ~pos.isin(["", "nan", "None", "NaT", "<NA>"])
+            else:
+                pos_filled = pd.Series(False, index=df.index)
+            if "termination_date" in df.columns:
+                td = df["termination_date"]
+                term_empty = td.isna() | td.astype(str).str.strip().isin(["", "nan", "None", "NaT", "<NA>"])
+            else:
+                term_empty = pd.Series(True, index=df.index)
+            estab_mask = pos_filled & term_empty
 
             status_counts["РАБОТАЮЩИЕ"] += int(opv_mask.sum())
             status_counts["ИП"] += int(ip_mask.sum())
@@ -112,8 +137,9 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 for grp, lo, hi in age_group_ranges:
                     age_group_counts[grp] += int(((ages_s >= lo) & (ages_s <= hi)).sum())
 
-            student_mask = vuz_mask | school_mask
-            students += int(student_mask.sum())
+            # СТУДЕНТ = ВУЗ или ТИПО (школа не считается)
+            student_mask = vuz_mask | tipo_flag
+            students += int(vuz_mask.sum())       # KPI «ВУЗ» = только VUZ=1
             status_counts["СТУДЕНТ"] += int(student_mask.sum())
             tipo_count += int(tipo_flag.sum())
 
@@ -172,7 +198,6 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 for nat, cnt in df["NATIONALTY"].dropna().value_counts().items():
                     nationality_counts[str(nat)] += int(cnt)
 
-            # ── PersonRecord rows for this sheet ──────────────────────────────
             age_grp = pd.Series('', index=df.index)
             if has_voz:
                 for grp, lo, hi in age_group_ranges:
@@ -180,6 +205,8 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
 
             reg_code = df["KATO_REG"].astype(str).fillna('') if "KATO_REG" in df.columns else pd.Series('', index=df.index)
             reg_name = df["REGNAME"].astype(str).fillna('') if "REGNAME" in df.columns else pd.Series('', index=df.index)
+            dist_code = df["KATO_RAI"].astype(str).fillna('') if "KATO_RAI" in df.columns else pd.Series('', index=df.index)
+            dist_name = df["RAINAME"].astype(str).fillna('') if "RAINAME" in df.columns else pd.Series('', index=df.index)
             gen_col = df["GENDER"].fillna('Не указано').astype(str) if "GENDER" in df.columns else pd.Series('Не указано', index=df.index)
             cat_col = df["SDU_TZHS"].fillna('Не указано').astype(str) if "SDU_TZHS" in df.columns else pd.Series('Не указано', index=df.index)
             okved_col = df["LVL1_NAME_RU"].fillna('').astype(str) if "LVL1_NAME_RU" in df.columns else pd.Series('', index=df.index)
@@ -191,6 +218,8 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 "session_id": session_id,
                 "region_code": reg_code,
                 "region_name": reg_name,
+                "district_code": dist_code,
+                "district_name": dist_name,
                 "age_group": age_grp,
                 "gender": gen_col,
                 "category": cat_col,
@@ -214,14 +243,39 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             })
 
             # Clean up sentinel strings from pandas
-            for col in ("region_code", "region_name", "gender", "category", "okved", "nationality", "age_group"):
+            for col in ("region_code", "region_name", "district_code", "district_name", "gender", "category", "okved", "nationality", "age_group"):
                 rec_df[col] = rec_df[col].replace({"nan": "", "None": ""})
 
-            records = rec_df.to_dict("records")
-            chunk = 5000
-            for i in range(0, len(records), chunk):
-                db.bulk_insert_mappings(PersonRecord, records[i:i + chunk])
-            db.commit()
+            rec_df["_cnt"] = 1
+            rec_df["_sal_pos"] = (rec_df["salary"] > 0).astype(int)
+            rec_df["_age_pos"] = (rec_df["age_val"] > 0).astype(int)
+            rec_df["_age_sum"] = rec_df["age_val"] * rec_df["_age_pos"]
+            grouped = rec_df.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC)
+            agg_chunks.append(grouped)
+
+    # ── Build MicroAgg from accumulated groupby chunks ────────────────────────
+    if agg_chunks:
+        combined = pd.concat(agg_chunks, ignore_index=True)
+        final_agg = combined.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC)
+        final_agg = final_agg.rename(columns={
+            "_cnt": "total_count",
+            "is_working": "working_count", "is_student": "student_count",
+            "is_tipo": "tipo_count", "has_contract": "contract_count",
+            "is_ip": "ip_count", "is_lsi": "lsi_count",
+            "is_unemployed": "unemployed_count", "is_uncovered": "uncovered_count",
+            "is_under18": "under18_count", "is_foreign": "foreign_count",
+            "is_pregnant": "pregnant_count", "is_uhod": "uhod_count",
+            "is_berkut": "berkut_count",
+            "salary": "salary_sum", "_sal_pos": "salary_count",
+            "_age_sum": "age_sum", "_age_pos": "age_count",
+        })
+        final_agg["session_id"] = session_id
+        final_agg["age_val"] = final_agg["age_val"].astype(int)
+        micro_records = final_agg.to_dict("records")
+        chunk = 5000
+        for i in range(0, len(micro_records), chunk):
+            db.bulk_insert_mappings(MicroAgg, micro_records[i:i + chunk])
+        db.commit()
 
     # ── Global derived stats ───────────────────────────────────────────────────
     age_total = sum(age_histogram.values())

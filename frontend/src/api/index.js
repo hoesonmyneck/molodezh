@@ -34,6 +34,7 @@ export const uploadFiles = (formData) =>
 
 export const getProgress = (sessionId) => api.get(`/upload/progress/${sessionId}`)
 export const getSessions = () => api.get('/upload/sessions')
+export const reprocessSession = (sessionId) => api.post(`/admin/reprocess/${sessionId}`)
 
 export const getKpis = () => api.get('/data/kpis')
 export const getStatuses = () => api.get('/data/statuses')
