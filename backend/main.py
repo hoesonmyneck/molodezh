@@ -221,6 +221,23 @@ def upload_progress(
     }
 
 
+@app.post("/api/admin/reset-session/{session_id}")
+def reset_session_status(
+    session_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Force-reset a stuck 'processing' session so it can be reprocessed."""
+    sess = db.query(UploadSession).filter(UploadSession.id == session_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    db.query(UploadSession).filter(UploadSession.id == session_id).update({
+        "status": "error", "error_message": "Сброшено вручную", "progress": 0, "current_file": "",
+    })
+    db.commit()
+    return {"ok": True}
+
+
 @app.post("/api/admin/reprocess/{session_id}")
 def reprocess_session(
     session_id: int,

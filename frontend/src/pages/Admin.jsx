@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   createUser, listUsers, deleteUser,
-  uploadFiles, getProgress, getSessions, reprocessSession,
+  uploadFiles, getProgress, getSessions, reprocessSession, resetSession,
 } from '../api'
 
 function Card({ children, style }) {
@@ -180,6 +180,16 @@ function UploadSection() {
     }, 2000)
   }
 
+  const handleReset = async (sid) => {
+    if (!confirm(`Сбросить статус сессии #${sid}? Это остановит "зависшую" обработку.`)) return
+    try {
+      await resetSession(sid)
+      loadSessions()
+    } catch (ex) {
+      alert(ex.response?.data?.detail || 'Ошибка сброса')
+    }
+  }
+
   const handleReprocess = async (sid) => {
     if (!confirm(`Перезапустить обработку сессии #${sid}? Текущие данные этой сессии будут удалены и пересчитаны.`)) return
     setUploading(true)
@@ -320,14 +330,25 @@ function UploadSection() {
                   </td>
                   <td style={td}>{s.is_active ? '✓' : ''}</td>
                   <td style={td}>
-                    <Btn
-                      variant="outline"
-                      style={{ padding: '4px 10px', fontSize: 11 }}
-                      disabled={uploading || s.status === 'processing'}
-                      onClick={() => handleReprocess(s.id)}
-                    >
-                      Перезапустить
-                    </Btn>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <Btn
+                        variant="outline"
+                        style={{ padding: '4px 10px', fontSize: 11 }}
+                        disabled={uploading || s.status === 'processing'}
+                        onClick={() => handleReprocess(s.id)}
+                      >
+                        Перезапустить
+                      </Btn>
+                      {s.status === 'processing' && (
+                        <Btn
+                          variant="danger"
+                          style={{ padding: '4px 10px', fontSize: 11 }}
+                          onClick={() => handleReset(s.id)}
+                        >
+                          Сбросить
+                        </Btn>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
