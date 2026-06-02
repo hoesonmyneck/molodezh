@@ -22,6 +22,30 @@ from models import (
 
 Base.metadata.create_all(bind=engine)
 
+# Runtime migrations: add columns that may not exist in older DB schemas
+from sqlalchemy import text as _text
+_migrations = [
+    ("okved_agg", "region_name",    "VARCHAR(120) DEFAULT ''"),
+    ("okved_agg", "contract_count", "INTEGER DEFAULT 0"),
+    ("okved_agg", "salary_sum",     "FLOAT DEFAULT 0.0"),
+    ("okved_agg", "salary_count",   "INTEGER DEFAULT 0"),
+    ("okved_agg", "age_sum",        "FLOAT DEFAULT 0.0"),
+    ("okved_agg", "age_count",      "INTEGER DEFAULT 0"),
+    ("nat_agg",   "region_name",    "VARCHAR(120) DEFAULT ''"),
+    ("nat_agg",   "contract_count", "INTEGER DEFAULT 0"),
+    ("nat_agg",   "salary_sum",     "FLOAT DEFAULT 0.0"),
+    ("nat_agg",   "salary_count",   "INTEGER DEFAULT 0"),
+    ("nat_agg",   "age_sum",        "FLOAT DEFAULT 0.0"),
+    ("nat_agg",   "age_count",      "INTEGER DEFAULT 0"),
+]
+with engine.connect() as _conn:
+    for _tbl, _col, _typ in _migrations:
+        try:
+            _conn.execute(_text(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_typ}"))
+            _conn.commit()
+        except Exception:
+            pass
+
 app = FastAPI(title="Молодежь РК")
 
 # ── In-memory filter cache (cleared on reprocess/upload) ─────────────────────
