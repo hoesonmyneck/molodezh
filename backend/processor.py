@@ -110,14 +110,14 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             school_mask = flag("SCHOOL")
             tipo_flag = flag("TIPO")
 
-            # Активный ТД: есть d_position_code и нет termination_date
-            if "d_position_code" in df.columns:
-                pos = df["d_position_code"].astype(str).str.strip()
+            # Активный ТД: есть D_POSITION_CODE и нет TERMINATION_DATE
+            if "D_POSITION_CODE" in df.columns:
+                pos = df["D_POSITION_CODE"].astype(str).str.strip()
                 pos_filled = ~pos.isin(["", "nan", "None", "NaT", "<NA>"])
             else:
                 pos_filled = pd.Series(False, index=df.index)
-            if "termination_date" in df.columns:
-                td = df["termination_date"]
+            if "TERMINATION_DATE" in df.columns:
+                td = df["TERMINATION_DATE"]
                 term_empty = td.isna() | td.astype(str).str.strip().isin(["", "nan", "None", "NaT", "<NA>"])
             else:
                 term_empty = pd.Series(True, index=df.index)
