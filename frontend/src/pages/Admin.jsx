@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   createUser, listUsers, deleteUser,
-  uploadFiles, getProgress, getSessions, reprocessSession, resetSession,
+  uploadFiles, getProgress, getSessions, reprocessSession, resetSession, cleanupUploads,
 } from '../api'
 
 function Card({ children, style }) {
@@ -204,6 +204,16 @@ function UploadSection() {
     }
   }
 
+  const handleCleanup = async () => {
+    if (!confirm('Удалить все загруженные Excel-файлы с диска? Обработанные данные в БД останутся.')) return
+    try {
+      const { data } = await cleanupUploads()
+      alert(`Очищено ${data.deleted_sessions.length} папок, освобождено ~${data.freed_mb} МБ`)
+    } catch (ex) {
+      alert(ex.response?.data?.detail || 'Ошибка очистки')
+    }
+  }
+
   const handleUpload = async () => {
     if (!files.length) return
     setUploading(true)
@@ -303,8 +313,11 @@ function UploadSection() {
 
       {sessions.length > 0 && (
         <div style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 10 }}>
-            История загрузок
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>История загрузок</div>
+            <Btn variant="danger" style={{ padding: '4px 10px', fontSize: 11 }} onClick={handleCleanup}>
+              Очистить диск
+            </Btn>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>

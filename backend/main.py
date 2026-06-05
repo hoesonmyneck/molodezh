@@ -1,4 +1,5 @@
 import os
+import shutil
 import threading
 from datetime import datetime, timedelta
 from typing import List
@@ -237,6 +238,8 @@ async def upload_files(
             db2.commit()
         finally:
             db2.close()
+            # Free disk space: remove uploaded files after processing (data is in DB)
+            shutil.rmtree(session_dir, ignore_errors=True)
 
     with _filter_cache_lock:
         _filter_cache.clear()
@@ -294,7 +297,7 @@ def reprocess_session(
 
     session_dir = os.path.join(UPLOAD_DIR, str(session_id))
     if not os.path.isdir(session_dir):
-        raise HTTPException(status_code=400, detail="Файлы сессии не найдены на диске")
+        raise HTTPException(status_code=400, detail="Файлы сессии удалены с диска (для экономии места). Загрузите файлы заново.")
 
     file_paths = sorted([
         os.path.join(session_dir, f)
@@ -335,6 +338,28 @@ def reprocess_session(
 
     threading.Thread(target=_run, daemon=True).start()
     return {"session_id": session_id, "files": len(file_paths)}
+
+
+@app.post("/api/admin/cleanup-uploads")
+def cleanup_uploads(_: User = Depends(require_admin)):
+    """Delete all uploaded Excel files from disk to free space. Processed data stays in DB."""
+    deleted, freed_mb = [], 0
+    if os.path.isdir(UPLOAD_DIR):
+        for entry in os.listdir(UPLOAD_DIR):
+            path = os.path.join(UPLOAD_DIR, entry)
+            if os.path.isdir(path):
+                try:
+                    size = sum(
+                        os.path.getsize(os.path.join(dp, f))
+                        for dp, _, files in os.walk(path)
+                        for f in files
+                    )
+                    shutil.rmtree(path, ignore_errors=True)
+                    freed_mb += size / 1024 / 1024
+                    deleted.append(entry)
+                except Exception:
+                    pass
+    return {"deleted_sessions": deleted, "freed_mb": round(freed_mb, 1)}
 
 
 @app.get("/api/upload/sessions")
