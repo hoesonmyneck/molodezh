@@ -46,6 +46,10 @@ export const getAgeGroups = () => api.get('/data/age-groups')
 export const getCategorization = () => api.get('/data/categorization')
 export const getGender = () => api.get('/data/gender')
 export const getOkved = () => api.get('/data/okved')
+export const getNkz = () => api.get('/data/nkz')
+export const getFamilyType = () => api.get('/data/family-type')
+export const getEdu = (edu_type) => api.get('/data/edu', { params: { edu_type } })
+export const getMigration = () => api.get('/data/migration')
 export const getNationality = () => api.get('/data/nationality')
 export const getFiltered = (filters) =>
   api.get('/data/filter', {

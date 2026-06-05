@@ -137,6 +137,7 @@ class MicroAgg(Base):
     age_val = Column(Integer, default=0)
     gender = Column(String(30), default='')
     category = Column(String(60), default='')
+    family_type = Column(String(120), default='')
     total_count = Column(Integer, default=0)
     working_count = Column(Integer, default=0)
     student_count = Column(Integer, default=0)
@@ -151,6 +152,11 @@ class MicroAgg(Base):
     pregnant_count = Column(Integer, default=0)
     uhod_count = Column(Integer, default=0)
     berkut_count = Column(Integer, default=0)
+    asp_count = Column(Integer, default=0)
+    pensioner_count = Column(Integer, default=0)
+    kandas_count = Column(Integer, default=0)
+    mnogodetnyi_count = Column(Integer, default=0)
+    cbd_count = Column(Integer, default=0)
     salary_sum = Column(Float, default=0.0)
     salary_count = Column(Integer, default=0)
     age_sum = Column(Float, default=0.0)
@@ -163,6 +169,7 @@ class MicroAgg(Base):
         Index('ix_micro_agg_sid_gen',  'session_id', 'gender'),
         Index('ix_micro_agg_sid_cat',  'session_id', 'category'),
         Index('ix_micro_agg_sid_aval', 'session_id', 'age_val'),
+        Index('ix_micro_agg_sid_fam',  'session_id', 'family_type'),
     )
 
 
@@ -193,6 +200,11 @@ class OkvedAgg(Base):
     pregnant_count = Column(Integer, default=0)
     uhod_count = Column(Integer, default=0)
     berkut_count = Column(Integer, default=0)
+    asp_count = Column(Integer, default=0)
+    pensioner_count = Column(Integer, default=0)
+    kandas_count = Column(Integer, default=0)
+    mnogodetnyi_count = Column(Integer, default=0)
+    cbd_count = Column(Integer, default=0)
     salary_sum = Column(Float, default=0.0)
     salary_count = Column(Integer, default=0)
     age_sum = Column(Float, default=0.0)
@@ -232,6 +244,11 @@ class NatAgg(Base):
     pregnant_count = Column(Integer, default=0)
     uhod_count = Column(Integer, default=0)
     berkut_count = Column(Integer, default=0)
+    asp_count = Column(Integer, default=0)
+    pensioner_count = Column(Integer, default=0)
+    kandas_count = Column(Integer, default=0)
+    mnogodetnyi_count = Column(Integer, default=0)
+    cbd_count = Column(Integer, default=0)
     salary_sum = Column(Float, default=0.0)
     salary_count = Column(Integer, default=0)
     age_sum = Column(Float, default=0.0)
@@ -242,3 +259,101 @@ class NatAgg(Base):
         Index('ix_nat_agg_sid_dist', 'session_id', 'district_code'),
         Index('ix_nat_agg_sid_nat',  'session_id', 'nationality'),
     )
+
+
+class NkzAgg(Base):
+    """НКЗ (occupations) aggregation — same structure as OkvedAgg."""
+    __tablename__ = "nkz_agg"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    region_code = Column(String(20), default='')
+    region_name = Column(String(120), default='')
+    district_code = Column(String(20), default='')
+    age_group = Column(String(10), default='')
+    age_val = Column(Integer, default=0)
+    gender = Column(String(30), default='')
+    category = Column(String(60), default='')
+    nkz = Column(String(220), default='')
+    total_count = Column(Integer, default=0)
+    working_count = Column(Integer, default=0)
+    student_count = Column(Integer, default=0)
+    tipo_count = Column(Integer, default=0)
+    contract_count = Column(Integer, default=0)
+    ip_count = Column(Integer, default=0)
+    lsi_count = Column(Integer, default=0)
+    unemployed_count = Column(Integer, default=0)
+    uncovered_count = Column(Integer, default=0)
+    under18_count = Column(Integer, default=0)
+    foreign_count = Column(Integer, default=0)
+    pregnant_count = Column(Integer, default=0)
+    uhod_count = Column(Integer, default=0)
+    berkut_count = Column(Integer, default=0)
+    asp_count = Column(Integer, default=0)
+    pensioner_count = Column(Integer, default=0)
+    kandas_count = Column(Integer, default=0)
+    mnogodetnyi_count = Column(Integer, default=0)
+    cbd_count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
+    age_sum = Column(Float, default=0.0)
+    age_count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index('ix_nkz_agg_sid_reg',  'session_id', 'region_code'),
+        Index('ix_nkz_agg_sid_dist', 'session_id', 'district_code'),
+        Index('ix_nkz_agg_sid_nkz',  'session_id', 'nkz'),
+    )
+
+
+class EduAgg(Base):
+    """Education institution aggregation (VUZ / TIPO / SCHOOL)."""
+    __tablename__ = "edu_agg"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    region_code = Column(String(20), default='')
+    region_name = Column(String(120), default='')
+    district_code = Column(String(20), default='')
+    age_group = Column(String(10), default='')
+    age_val = Column(Integer, default=0)
+    gender = Column(String(30), default='')
+    category = Column(String(60), default='')
+    edu_type = Column(String(10), default='')   # 'vuz', 'tipo', 'school'
+    edu_name = Column(String(220), default='')
+    total_count = Column(Integer, default=0)
+    working_count = Column(Integer, default=0)
+    student_count = Column(Integer, default=0)
+    tipo_count = Column(Integer, default=0)
+    contract_count = Column(Integer, default=0)
+    ip_count = Column(Integer, default=0)
+    lsi_count = Column(Integer, default=0)
+    unemployed_count = Column(Integer, default=0)
+    uncovered_count = Column(Integer, default=0)
+    under18_count = Column(Integer, default=0)
+    foreign_count = Column(Integer, default=0)
+    pregnant_count = Column(Integer, default=0)
+    uhod_count = Column(Integer, default=0)
+    berkut_count = Column(Integer, default=0)
+    asp_count = Column(Integer, default=0)
+    pensioner_count = Column(Integer, default=0)
+    kandas_count = Column(Integer, default=0)
+    mnogodetnyi_count = Column(Integer, default=0)
+    cbd_count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
+    age_sum = Column(Float, default=0.0)
+    age_count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index('ix_edu_agg_sid_type', 'session_id', 'edu_type'),
+        Index('ix_edu_agg_sid_name', 'session_id', 'edu_name'),
+        Index('ix_edu_agg_sid_reg',  'session_id', 'region_code'),
+    )
+
+
+class MigrationStats(Base):
+    __tablename__ = "migration_stats"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    region_name = Column(String(120), default='')
+    departed = Column(Integer, default=0)
+    arrived = Column(Integer, default=0)

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from models import (
     KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
     AgeDistribution, Categorization, GenderStats, OkvedStats,
-    NationalityStats, UploadSession, MicroAgg, OkvedAgg, NatAgg,
+    NationalityStats, UploadSession, MicroAgg, OkvedAgg, NatAgg, NkzAgg, EduAgg, MigrationStats,
 )
 
 
@@ -32,7 +32,8 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         "РАБОТАЮЩИЕ", "ДЕТИ ОТ 14 ДО 18 ЛЕТ", "НЕОХВАЧЕННЫЕ",
         "СТУДЕНТ", "ИП", "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3",
         "ЛСИ", "ИНОСТРАННЫЕ ГРАЖДАНЕ",
-        "БЕЗРАБОТНЫЕ", "БЕРЕМЕННЫЕ", "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ",
+        "БЕЗРАБОТНЫЕ", "БЕРЕМЕННЫЕ", "ПО УХОДУ ЗА ЛСИ",
+        "ПОЛУЧАТЕЛИ АСП", "ПЕНСИОНЕРЫ", "КАНДАСЫ", "МНОГОДЕТНЫЕ", "ПОЛУЧАТЕЛИ ПОСОБИЙ",
     ]
     status_counts: dict[str, int] = {k: 0 for k in STATUS_KEYS}
 
@@ -48,32 +49,33 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     gender_counts: dict[str, int] = defaultdict(int)
     okved_counts: dict[str, int] = defaultdict(int)
     nationality_counts: dict[str, int] = defaultdict(int)
+    departed_counts: dict[str, int] = defaultdict(int)
+    arrived_counts: dict[str, int] = defaultdict(int)
 
     total_files = len(file_paths)
 
     # MicroAgg: core dims only — okved/nationality live in separate tables
     _DIM_COLS = [
         "region_code", "region_name", "district_code", "district_name",
-        "age_group", "age_val", "gender", "category",
+        "age_group", "age_val", "gender", "category", "family_type",
     ]
     _OKVED_DIM_COLS = ["region_code", "region_name", "district_code", "age_group", "age_val", "gender", "category", "okved"]
     _NAT_DIM_COLS   = ["region_code", "region_name", "district_code", "age_group", "age_val", "gender", "category", "nationality"]
+    _NKZ_DIM_COLS   = ["region_code", "region_name", "district_code", "age_group", "age_val", "gender", "category", "nkz"]
+    _EDU_DIM_COLS   = ["region_code", "region_name", "district_code", "age_group", "age_val", "gender", "category", "edu_type", "edu_name"]
 
-    _AGG_SPEC = {
+    _NEW_FLAGS = ["is_asp", "is_pensioner", "is_kandas", "is_mnogodetnyi", "is_cbd"]
+    _BASE_AGG = {
         "_cnt": "sum", "is_working": "sum", "is_student": "sum", "is_tipo": "sum",
         "has_contract": "sum", "is_ip": "sum", "is_lsi": "sum",
         "is_unemployed": "sum", "is_uncovered": "sum", "is_under18": "sum",
         "is_foreign": "sum", "is_pregnant": "sum", "is_uhod": "sum", "is_berkut": "sum",
+        "is_asp": "sum", "is_pensioner": "sum", "is_kandas": "sum",
+        "is_mnogodetnyi": "sum", "is_cbd": "sum",
         "salary": "sum", "_sal_pos": "sum", "_age_sum": "sum", "_age_pos": "sum",
     }
-    # OkvedAgg/NatAgg need full count set so they can act as primary filter table
-    _ST_AGG_SPEC = {
-        "_cnt": "sum", "is_working": "sum", "is_student": "sum", "is_tipo": "sum",
-        "has_contract": "sum", "is_ip": "sum", "is_lsi": "sum",
-        "is_unemployed": "sum", "is_uncovered": "sum", "is_under18": "sum",
-        "is_foreign": "sum", "is_pregnant": "sum", "is_uhod": "sum", "is_berkut": "sum",
-        "salary": "sum", "_sal_pos": "sum", "_age_sum": "sum", "_age_pos": "sum",
-    }
+    _AGG_SPEC    = _BASE_AGG
+    _ST_AGG_SPEC = _BASE_AGG
     _ST_RENAME = {
         "_cnt": "total_count",
         "is_working": "working_count", "is_student": "student_count",
@@ -83,6 +85,9 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         "is_under18": "under18_count", "is_foreign": "foreign_count",
         "is_pregnant": "pregnant_count", "is_uhod": "uhod_count",
         "is_berkut": "berkut_count",
+        "is_asp": "asp_count", "is_pensioner": "pensioner_count",
+        "is_kandas": "kandas_count", "is_mnogodetnyi": "mnogodetnyi_count",
+        "is_cbd": "cbd_count",
         "salary": "salary_sum", "_sal_pos": "salary_count",
         "_age_sum": "age_sum", "_age_pos": "age_count",
     }
@@ -92,6 +97,8 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         agg_chunks: list = []
         okved_chunks: list = []
         nat_chunks: list = []
+        nkz_chunks: list = []
+        edu_chunks: list = []
         file_name = os.path.basename(file_path)
         _update(db, session_id, int(file_idx / total_files * 85), file_name)
 
@@ -114,15 +121,20 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                     return pd.to_numeric(df[col], errors="coerce").fillna(0) == 1
                 return pd.Series(False, index=df.index)
 
-            opv_mask = flag("OPV")
+            opv_mask = flag("WORKING") | flag("OPV") | flag("HAS_OPV")
             ip_mask = flag("IP")
             lsi_mask = flag("LSI")
             berem_mask = flag("BEREM")
-            uhod_mask = flag("WOMAN_UHOD_DO3")
-            berkut_mask = flag("IS_BERKUT")
+            uhod_mask = flag("DETID_DO_3LET") | flag("WOMAN_UHOD_DO3")
+            berkut_mask = flag("UHOD_INV") | flag("IS_BERKUT")
             vuz_mask = flag("VUZ")
             school_mask = flag("SCHOOL")
             tipo_flag = flag("TIPO")
+            asp_mask = flag("ASP")
+            pensioner_mask = flag("PENSIONERS")
+            kandas_mask = flag("KANDAS")
+            mnogodetnyi_mask = flag("MNOGODETNYI")
+            cbd_mask = flag("CBD")
 
             # Активный ТД: есть D_POSITION_CODE и нет TERMINATION_DATE
             if "D_POSITION_CODE" in df.columns:
@@ -142,7 +154,12 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             status_counts["ЛСИ"] += int(lsi_mask.sum())
             status_counts["БЕРЕМЕННЫЕ"] += int(berem_mask.sum())
             status_counts["ПО УХОДУ ЗА РЕБЕНКОМ ДО 3"] += int(uhod_mask.sum())
-            status_counts["ПО УХОДУ ЗА РЕБЕНКОМ ИНВ"] += int(berkut_mask.sum())
+            status_counts["ПО УХОДУ ЗА ЛСИ"] += int(berkut_mask.sum())
+            status_counts["ПОЛУЧАТЕЛИ АСП"] += int(asp_mask.sum())
+            status_counts["ПЕНСИОНЕРЫ"] += int(pensioner_mask.sum())
+            status_counts["КАНДАСЫ"] += int(kandas_mask.sum())
+            status_counts["МНОГОДЕТНЫЕ"] += int(mnogodetnyi_mask.sum())
+            status_counts["ПОЛУЧАТЕЛИ ПОСОБИЙ"] += int(cbd_mask.sum())
             active_contracts += int(estab_mask.sum())
 
             if "SMZ_3M" in df.columns:
@@ -159,10 +176,14 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 ages_s = pd.to_numeric(df["VOZRAST"], errors="coerce").fillna(0)
                 for av, cnt in ages_s[ages_s > 0].astype(int).value_counts().items():
                     age_histogram[int(av)] += int(cnt)
-                age_under18 = (ages_s > 0) & (ages_s < 18)
-                status_counts["ДЕТИ ОТ 14 ДО 18 ЛЕТ"] += int(age_under18.sum())
                 for grp, lo, hi in age_group_ranges:
                     age_group_counts[grp] += int(((ages_s >= lo) & (ages_s <= hi)).sum())
+
+            if "DETI_DO18" in df.columns:
+                age_under18 = flag("DETI_DO18")
+            elif has_voz:
+                age_under18 = (ages_s > 0) & (ages_s < 18)
+            status_counts["ДЕТИ ОТ 14 ДО 18 ЛЕТ"] += int(age_under18.sum())
 
             # СТУДЕНТ = ВУЗ или ТИПО (школа не считается)
             student_mask = vuz_mask | tipo_flag
@@ -183,23 +204,31 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             uncov = ~has_status
             status_counts["НЕОХВАЧЕННЫЕ"] += int(uncov.sum())
 
-            if has_voz:
+            if "RT_UNEMPLOYED" in df.columns:
+                unemployed = flag("RT_UNEMPLOYED")
+            elif has_voz:
                 adult = ages_s >= 18
                 unemployed = (
                     adult & ~opv_mask & ~student_mask & ~tipo_flag &
                     ~ip_mask & ~uhod_mask & ~lsi_mask & ~berem_mask & ~berkut_mask
                 )
-                status_counts["БЕЗРАБОТНЫЕ"] += int(unemployed.sum())
+            status_counts["БЕЗРАБОТНЫЕ"] += int(unemployed.sum())
 
-            if "KATO_REG" in df.columns and "REGNAME" in df.columns:
-                for (code, name), cnt in df.groupby(["KATO_REG", "REGNAME"]).size().items():
+            _rn_col    = "KATO_REGNAME" if "KATO_REGNAME" in df.columns else ("REGNAME" if "REGNAME" in df.columns else None)
+            _dn_col    = "KATO_RAINAME" if "KATO_RAINAME" in df.columns else ("RAINAME" if "RAINAME" in df.columns else None)
+            _sdu_col   = "SDU_THZS" if "SDU_THZS" in df.columns else ("SDU_TZHS" if "SDU_TZHS" in df.columns else None)
+            _okved_col = "NAME_OKED" if "NAME_OKED" in df.columns else None
+            _nkz_col   = "NKZ_NAME_LVL_1" if "NKZ_NAME_LVL_1" in df.columns else ("LVL1_NAME_RU" if "LVL1_NAME_RU" in df.columns else None)
+
+            if "KATO_REG" in df.columns and _rn_col:
+                for (code, name), cnt in df.groupby(["KATO_REG", _rn_col]).size().items():
                     sc = str(code)
                     region_counts[sc] += int(cnt)
                     region_names[sc] = str(name)
 
-            if all(c in df.columns for c in ["KATO_REG", "REGNAME", "KATO_RAI", "RAINAME"]):
+            if _rn_col and _dn_col and all(c in df.columns for c in ["KATO_REG", "KATO_RAI"]):
                 for (rc, rn, dc, dn), cnt in df.groupby(
-                    ["KATO_REG", "REGNAME", "KATO_RAI", "RAINAME"]
+                    ["KATO_REG", _rn_col, "KATO_RAI", _dn_col]
                 ).size().items():
                     key = (str(rc), str(dc))
                     district_counts[key] += int(cnt)
@@ -208,36 +237,53 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                         "dist_code": str(dc), "dist_name": str(dn),
                     }
 
-            if "SDU_TZHS" in df.columns:
-                for cat, cnt in df["SDU_TZHS"].fillna("Не указано").value_counts().items():
+            if _sdu_col:
+                for cat, cnt in df[_sdu_col].fillna("Не указано").value_counts().items():
                     cat_counts[str(cat)] += int(cnt)
 
             if "GENDER" in df.columns:
                 for gen, cnt in df["GENDER"].fillna("Не указано").value_counts().items():
                     gender_counts[str(gen)] += int(cnt)
 
-            if "LVL1_NAME_RU" in df.columns:
-                for nm, cnt in df["LVL1_NAME_RU"].dropna().value_counts().items():
+            if _okved_col:
+                for nm, cnt in df[_okved_col].dropna().value_counts().items():
                     if str(nm) not in ("nan", "None"):
                         okved_counts[str(nm)] += int(cnt)
+            if _nkz_col:
+                for nm, cnt in df[_nkz_col].dropna().value_counts().items():
+                    if str(nm) not in ("nan", "None"):
+                        pass  # NkzAgg is queried directly, no separate NkzStats
 
             if "NATIONALTY" in df.columns:
                 for nat, cnt in df["NATIONALTY"].dropna().value_counts().items():
                     nationality_counts[str(nat)] += int(cnt)
+
+            if "A_KATO_REG_NAME" in df.columns:
+                for nm, cnt in df["A_KATO_REG_NAME"].dropna().value_counts().items():
+                    s = str(nm).strip()
+                    if s and s not in ("nan", "None"):
+                        departed_counts[s] += int(cnt)
+            if "B_KATO_REG_NAME" in df.columns:
+                for nm, cnt in df["B_KATO_REG_NAME"].dropna().value_counts().items():
+                    s = str(nm).strip()
+                    if s and s not in ("nan", "None"):
+                        arrived_counts[s] += int(cnt)
 
             age_grp = pd.Series('', index=df.index)
             if has_voz:
                 for grp, lo, hi in age_group_ranges:
                     age_grp[(ages_s >= lo) & (ages_s <= hi)] = grp
 
-            reg_code = df["KATO_REG"].astype(str).fillna('') if "KATO_REG" in df.columns else pd.Series('', index=df.index)
-            reg_name = df["REGNAME"].astype(str).fillna('') if "REGNAME" in df.columns else pd.Series('', index=df.index)
+            reg_code  = df["KATO_REG"].astype(str).fillna('') if "KATO_REG" in df.columns else pd.Series('', index=df.index)
+            reg_name  = df[_rn_col].astype(str).fillna('') if _rn_col else pd.Series('', index=df.index)
             dist_code = df["KATO_RAI"].astype(str).fillna('') if "KATO_RAI" in df.columns else pd.Series('', index=df.index)
-            dist_name = df["RAINAME"].astype(str).fillna('') if "RAINAME" in df.columns else pd.Series('', index=df.index)
-            gen_col = df["GENDER"].fillna('Не указано').astype(str) if "GENDER" in df.columns else pd.Series('Не указано', index=df.index)
-            cat_col = df["SDU_TZHS"].fillna('Не указано').astype(str) if "SDU_TZHS" in df.columns else pd.Series('Не указано', index=df.index)
-            okved_col = df["LVL1_NAME_RU"].fillna('').astype(str) if "LVL1_NAME_RU" in df.columns else pd.Series('', index=df.index)
-            nat_col = df["NATIONALTY"].fillna('').astype(str) if "NATIONALTY" in df.columns else pd.Series('', index=df.index)
+            dist_name = df[_dn_col].astype(str).fillna('') if _dn_col else pd.Series('', index=df.index)
+            gen_col   = df["GENDER"].fillna('Не указано').astype(str) if "GENDER" in df.columns else pd.Series('Не указано', index=df.index)
+            cat_col   = df[_sdu_col].fillna('Не указано').astype(str) if _sdu_col else pd.Series('Не указано', index=df.index)
+            okved_col = df[_okved_col].fillna('').astype(str) if _okved_col else pd.Series('', index=df.index)
+            nkz_col   = df[_nkz_col].fillna('').astype(str) if _nkz_col else pd.Series('', index=df.index)
+            nat_col   = df["NATIONALTY"].fillna('').astype(str) if "NATIONALTY" in df.columns else pd.Series('', index=df.index)
+            fam_col   = df["FAMILY_TYPE"].fillna('').astype(str) if "FAMILY_TYPE" in df.columns else pd.Series('', index=df.index)
             sal_col = pd.to_numeric(df["SMZ_3M"], errors="coerce").fillna(0).clip(lower=0) if "SMZ_3M" in df.columns else pd.Series(0.0, index=df.index)
             age_int = ages_s.astype(int) if has_voz else pd.Series(0, index=df.index)
 
@@ -250,7 +296,9 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 "age_group": age_grp,
                 "gender": gen_col,
                 "category": cat_col,
+                "family_type": fam_col,
                 "okved": okved_col,
+                "nkz": nkz_col,
                 "nationality": nat_col,
                 "is_working": opv_mask.astype(int),
                 "is_student": student_mask.astype(int),
@@ -265,12 +313,17 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                 "is_pregnant": berem_mask.astype(int),
                 "is_uhod": uhod_mask.astype(int),
                 "is_berkut": berkut_mask.astype(int),
+                "is_asp": asp_mask.astype(int),
+                "is_pensioner": pensioner_mask.astype(int),
+                "is_kandas": kandas_mask.astype(int),
+                "is_mnogodetnyi": mnogodetnyi_mask.astype(int),
+                "is_cbd": cbd_mask.astype(int),
                 "salary": sal_col,
                 "age_val": age_int,
             })
 
             # Clean up sentinel strings from pandas
-            for col in ("region_code", "region_name", "district_code", "district_name", "gender", "category", "okved", "nationality", "age_group"):
+            for col in ("region_code", "region_name", "district_code", "district_name", "gender", "category", "family_type", "okved", "nkz", "nationality", "age_group"):
                 rec_df[col] = rec_df[col].replace({"nan": "", "None": ""})
 
             rec_df["_cnt"] = 1
@@ -287,6 +340,29 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             _nat_df = rec_df[rec_df["nationality"] != ""]
             if len(_nat_df):
                 nat_chunks.append(_nat_df.groupby(_NAT_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
+
+            _nkz_df = rec_df[rec_df["nkz"] != ""]
+            if len(_nkz_df):
+                nkz_chunks.append(_nkz_df.groupby(_NKZ_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
+
+            vuz_name_col = df["VUZ_NAME"].fillna('').astype(str).replace({"nan": "", "None": ""}) if "VUZ_NAME" in df.columns else pd.Series('', index=df.index)
+            tipo_name_col = df["TIPO_NAME"].fillna('').astype(str).replace({"nan": "", "None": ""}) if "TIPO_NAME" in df.columns else pd.Series('', index=df.index)
+            school_name_col = df["SCHOOL_NAME"].fillna('').astype(str).replace({"nan": "", "None": ""}) if "SCHOOL_NAME" in df.columns else pd.Series('', index=df.index)
+            edu_parts = []
+            for _emask, _ecol, _etype in [
+                (vuz_mask,    vuz_name_col,    "vuz"),
+                (tipo_flag,   tipo_name_col,   "tipo"),
+                (school_mask, school_name_col, "school"),
+            ]:
+                _nm = _emask & (_ecol != '') & (_ecol != 'nan') & (_ecol != 'None')
+                if _nm.any():
+                    _ep = rec_df[_nm].copy()
+                    _ep["edu_type"] = _etype
+                    _ep["edu_name"] = _ecol[_nm].values
+                    edu_parts.append(_ep)
+            if edu_parts:
+                _edu_df = pd.concat(edu_parts, ignore_index=True)
+                edu_chunks.append(_edu_df.groupby(_EDU_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
 
         # ── Insert this file's agg rows immediately; free RAM before next file ─
         def _insert_agg(chunks, dim_cols, agg_spec, Model):
@@ -305,6 +381,8 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         _insert_agg(agg_chunks,   _DIM_COLS,      _AGG_SPEC,    MicroAgg)
         _insert_agg(okved_chunks, _OKVED_DIM_COLS, _ST_AGG_SPEC, OkvedAgg)
         _insert_agg(nat_chunks,   _NAT_DIM_COLS,   _ST_AGG_SPEC, NatAgg)
+        _insert_agg(nkz_chunks,   _NKZ_DIM_COLS,   _ST_AGG_SPEC, NkzAgg)
+        _insert_agg(edu_chunks,   _EDU_DIM_COLS,   _ST_AGG_SPEC, EduAgg)
 
     # ── Global derived stats ───────────────────────────────────────────────────
     age_total = sum(age_histogram.values())
@@ -351,6 +429,14 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         db.add(OkvedStats(session_id=session_id, okved_name=nm, count=count))
     for nat, count in sorted(nationality_counts.items(), key=lambda x: -x[1])[:20]:
         db.add(NationalityStats(session_id=session_id, nationality=nat, count=count))
+    all_mig_regions = sorted(set(departed_counts.keys()) | set(arrived_counts.keys()))
+    for reg in all_mig_regions:
+        db.add(MigrationStats(
+            session_id=session_id,
+            region_name=reg,
+            departed=departed_counts.get(reg, 0),
+            arrived=arrived_counts.get(reg, 0),
+        ))
     db.commit()
 
     db.query(UploadSession).filter(UploadSession.id == session_id).update({

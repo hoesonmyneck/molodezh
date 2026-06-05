@@ -3,10 +3,12 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   PieChart, Pie, Cell, ResponsiveContainer,
 } from 'recharts'
+import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
 import {
   getKpis, getStatuses, getRegions,
-  getAgeGroups, getCategorization, getGender, getOkved, getNationality,
-  getFiltered,
+  getAgeGroups, getCategorization, getGender, getOkved, getNkz, getNationality,
+  getFamilyType, getEdu, getMigration, getFiltered,
 } from '../api'
 
 const TEAL = '#147a80'
@@ -35,7 +37,7 @@ function Card({ children, style }) {
   )
 }
 
-function KpiCard({ title, main, sub, subLabel }) {
+function KpiCard({ title, main, sub, subLabel, onSubClick, activeFilter }) {
   return (
     <Card style={{ padding: '18px 20px', flex: 1, minWidth: 0 }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .5, marginBottom: 10 }}>
@@ -44,9 +46,17 @@ function KpiCard({ title, main, sub, subLabel }) {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
         <span style={{ fontSize: 28, fontWeight: 700, color: TEAL, lineHeight: 1 }}>{fmt(main)}</span>
         {sub != null && (
-          <div style={{ lineHeight: 1.3 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{fmt(sub)}</div>
-            <div style={{ fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase' }}>{subLabel}</div>
+          <div
+            onClick={onSubClick}
+            style={{
+              lineHeight: 1.3, cursor: onSubClick ? 'pointer' : 'default',
+              padding: '2px 6px', borderRadius: 5,
+              background: activeFilter ? TEAL : 'transparent',
+              transition: 'background .15s',
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, color: activeFilter ? '#fff' : '#374151' }}>{fmt(sub)}</div>
+            <div style={{ fontSize: 10, color: activeFilter ? 'rgba(255,255,255,.8)' : 'var(--muted)', textTransform: 'uppercase' }}>{subLabel}</div>
           </div>
         )}
       </div>
@@ -89,7 +99,7 @@ function EmptyState() {
 // ── Filter banner ─────────────────────────────────────────────────────────────
 function FilterBanner({ filters, onRemove, onClear }) {
   if (!filters.length) return null
-  const dimLabel = { status: 'Статус', age_group: 'Возраст', region: 'Регион', gender: 'Пол', cat: 'Категория', okved: 'ОКЭД', nationality: 'Нац-сть' }
+  const dimLabel = { status: 'Статус', age_group: 'Возраст', region: 'Регион', gender: 'Пол', cat: 'Категория', okved: 'ОКЭД', nkz: 'НКЗ', nationality: 'Нац-сть', family_type: 'Тип семьи', vuz: 'ВУЗ', tipo: 'ТИПО', school: 'Школа' }
   return (
     <div style={{
       display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6,
@@ -170,8 +180,8 @@ function StatusChart({ data, activeKeys, onToggle }) {
 function AgeBar({ data, activeKeys, onToggle }) {
   if (!data?.length) return <EmptyState />
   return (
-    <div style={{ flex: 1, minHeight: 120 }}>
-    <ResponsiveContainer width="100%" height="100%">
+    <div>
+    <ResponsiveContainer width="100%" height={220}>
       <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} barSize={32}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
         <XAxis dataKey="group" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
@@ -193,28 +203,48 @@ function AgeBar({ data, activeKeys, onToggle }) {
   )
 }
 
-function OkvedChart({ data, activeKeys, onToggle }) {
+function OkvedChart({ data, activeKeys, dimKey = 'okved', onToggle }) {
   if (!data?.length) return <EmptyState />
   const top = data.slice(0, 10)
+
+  const renderLabel = ({ x, y, width, height, value, index }) => {
+    const salary = top[index]?.avg_salary || 0
+    const midY = y + height / 2
+    return (
+      <g key={index}>
+        <text x={x + width + 6} y={midY - (salary > 0 ? 5 : 0)} fontSize={10} fill="#6b7280" dominantBaseline="middle">
+          {fmt(value)}
+        </text>
+        {salary > 0 && (
+          <text x={x + width + 6} y={midY + 7} fontSize={9} fill="#9ca3af" dominantBaseline="middle">
+            {'СМЗ: ' + fmt(salary)}
+          </text>
+        )}
+      </g>
+    )
+  }
+
   return (
-    <ResponsiveContainer width="100%" height={Math.max(280, top.length * 36)}>
-      <BarChart data={top} layout="vertical" margin={{ top: 0, right: 60, left: 10, bottom: 0 }} barSize={14}>
+    <div style={{ flex: 1, minHeight: 200 }}>
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={top} layout="vertical" margin={{ top: 0, right: 120, left: 10, bottom: 0 }} barSize={16}>
         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" />
         <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
         <YAxis dataKey="name" type="category" width={240} tick={{ fontSize: 10, fill: '#374151' }} axisLine={false} tickLine={false} />
         <Tooltip content={<BTooltip />} cursor={{ fill: '#f9fafb' }} />
         <Bar dataKey="count" radius={[0, 4, 4, 0]}
-          label={{ position: 'right', fontSize: 10, fill: '#6b7280', formatter: fmt }}
-          onClick={(d) => onToggle('okved', d.name)}
+          label={renderLabel}
+          onClick={(d) => onToggle(dimKey, d.name)}
           style={{ cursor: 'pointer' }}
         >
           {top.map((e, i) => {
-            const active = activeKeys.some(f => f.dim === 'okved' && f.val === e.name)
+            const active = activeKeys.some(f => f.dim === dimKey && f.val === e.name)
             return <Cell key={i} fill={active ? TEAL_DARK : '#1a9099'} opacity={activeKeys.length && !active ? 0.45 : 1} />
           })}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+    </div>
   )
 }
 
@@ -262,13 +292,14 @@ function RegionTable({ data, activeKeys, onToggle }) {
   if (!data?.length) return <EmptyState />
   const total = data.reduce((s, r) => s + r.count, 0)
   return (
-    <div style={{ overflowY: 'auto', maxHeight: 380 }}>
+    <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
           <tr style={{ borderBottom: '1px solid var(--border)' }}>
             <th style={th}>Регион</th>
-            <th style={{ ...th, textAlign: 'right' }}>Количество</th>
+            <th style={{ ...th, textAlign: 'right' }}>Кол-во</th>
             <th style={{ ...th, textAlign: 'right' }}>%</th>
+            <th style={{ ...th, textAlign: 'right' }}>СМЗ</th>
           </tr>
         </thead>
         <tbody>
@@ -282,6 +313,9 @@ function RegionTable({ data, activeKeys, onToggle }) {
                 <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 600, color: TEAL }}>{fmt(r.count)}</td>
                 <td style={{ padding: '8px 4px', textAlign: 'right', color: 'var(--muted)' }}>
                   {total ? ((r.count / total) * 100).toFixed(1) + '%' : '—'}
+                </td>
+                <td style={{ padding: '8px 4px', textAlign: 'right', color: '#6b7280' }}>
+                  {r.avg_salary > 0 ? fmt(r.avg_salary) : '—'}
                 </td>
               </tr>
             )
@@ -297,7 +331,7 @@ function NationalityTable({ data, activeKeys, onToggle }) {
   const top = data.slice(0, 15)
   const total = data.reduce((s, d) => s + d.count, 0)
   return (
-    <div style={{ overflowY: 'auto', maxHeight: 380 }}>
+    <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
           <tr style={{ borderBottom: '1px solid var(--border)' }}>
@@ -316,6 +350,40 @@ function NationalityTable({ data, activeKeys, onToggle }) {
                 <td style={{ padding: '7px 4px' }}>{r.nationality}</td>
                 <td style={{ padding: '7px 4px', textAlign: 'right', fontWeight: 600, color: TEAL }}>{fmt(r.count)}</td>
                 <td style={{ padding: '7px 4px', textAlign: 'right', color: 'var(--muted)' }}>
+                  {total ? ((r.count / total) * 100).toFixed(1) + '%' : '—'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function EduTable({ data, dimKey, activeKeys, onToggle, totalOverride }) {
+  if (!data?.length) return <EmptyState />
+  const total = totalOverride || data.reduce((s, r) => s + r.count, 0)
+  return (
+    <div style={{ overflowY: 'auto', maxHeight: 380 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+            <th style={th}>Учебное заведение</th>
+            <th style={{ ...th, textAlign: 'right' }}>Кол-во</th>
+            <th style={{ ...th, textAlign: 'right' }}>%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r, i) => {
+            const isActive = activeKeys.some(f => f.dim === dimKey && f.val === r.name)
+            return (
+              <tr key={i}
+                onClick={() => onToggle(dimKey, r.name)}
+                style={{ borderBottom: '1px solid #f9fafb', ...clickStyle(isActive) }}>
+                <td style={{ padding: '8px 4px' }}>{r.name}</td>
+                <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 600, color: TEAL }}>{fmt(r.count)}</td>
+                <td style={{ padding: '8px 4px', textAlign: 'right', color: 'var(--muted)' }}>
                   {total ? ((r.count / total) * 100).toFixed(1) + '%' : '—'}
                 </td>
               </tr>
@@ -363,6 +431,202 @@ function CatTable({ data, activeKeys, onToggle }) {
   )
 }
 
+function MigrationTable({ data }) {
+  if (!data?.length) return <EmptyState />
+  return (
+    <div style={{ overflowY: 'auto', maxHeight: 420 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead style={{ position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+            <th style={th}>Регион</th>
+            <th style={{ ...th, textAlign: 'right', color: '#dc2626' }}>Отбыло</th>
+            <th style={{ ...th, textAlign: 'right', color: '#16a34a' }}>Прибыло</th>
+            <th style={{ ...th, textAlign: 'right' }}>Динамика</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((r, i) => {
+            const net = r.arrived - r.departed
+            return (
+              <tr key={i} style={{ borderBottom: '1px solid #f9fafb' }}>
+                <td style={{ padding: '8px 4px' }}>{r.region}</td>
+                <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 600, color: '#dc2626' }}>{fmt(r.departed)}</td>
+                <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 600, color: '#16a34a' }}>{fmt(r.arrived)}</td>
+                <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700,
+                  color: net > 0 ? '#16a34a' : net < 0 ? '#dc2626' : '#9ca3af' }}>
+                  {net > 0 ? '+' : ''}{fmt(net)}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Kazakhstan Leaflet Map ─────────────────────────────────────────────────────
+const GEO_URL_PRIMARY  = 'https://cdn.jsdelivr.net/gh/wmgeolab/geoBoundaries@5.0.0/releaseData/gbOpen/KAZ/ADM1/geoBoundaries-KAZ-ADM1.geojson'
+const GEO_URL_FALLBACK = '/kz-regions.geojson'
+
+// canonical forms used as byNorm keys (GeoJSON name → canonical)
+const EN_NORM = {
+  // GeoJSON abbreviations
+  'зко': 'западноказахстанская',
+  'вко': 'восточноказахстанская',
+  'ско': 'североказахстанская',
+  // DB dash-abbreviations (В-КАЗАХСТАНСКАЯ etc. from some Excel files)
+  'в-казахстанская': 'восточноказахстанская',
+  'з-казахстанская': 'западноказахстанская',
+  'с-казахстанская': 'североказахстанская',
+  // city prefixes in GeoJSON and DB
+  'г.шымкент': 'шымкент',
+  'г.астана': 'астана',
+  'г.алматы': 'алматы',
+  // Kazakh-letter variants (DB uses Kazakh і/ұ, GeoJSON uses Russian ы/у)
+  'жетісу': 'жетысу',   // DB: Жетісу (і=U+0456) → GeoJSON canonical: Жетысу
+  'ұлытау': 'улытау',   // DB: ҰЛЫТАУ (ұ=U+04B0) → GeoJSON canonical: Улытау
+  // geoBoundaries English names (if CDN fallback ever loads)
+  'east kazakhstan': 'восточноказахстанская',
+  'shyghys qazaqstan': 'восточноказахстанская',
+  'west kazakhstan': 'западноказахстанская',
+  'batys qazaqstan': 'западноказахстанская',
+  'north kazakhstan': 'североказахстанская',
+  'soltustik qazaqstan': 'североказахстанская',
+  'south kazakhstan': 'туркестанская',
+  'turkistan': 'туркестанская',
+  'almaty region': 'алматинская',
+  'aqmola': 'акмолинская',
+  'aqtobe': 'актюбинская',
+  'atyrau': 'атырауская',
+  'karagandy': 'карагандинская',
+  'kostanay': 'костанайская',
+  'kyzylorda': 'кызылординская',
+  'mangystau': 'мангистауская',
+  'pavlodar': 'павлодарская',
+  'zhambyl': 'жамбылская',
+  'shymkent': 'шымкент',
+  'astana': 'астана',
+  'almaty': 'алматы',
+}
+
+function KazakhstanMap({ regions, activeKeys, onToggle }) {
+  const [geoData, setGeoData] = useState(null)
+  const [loadErr, setLoadErr] = useState(false)
+
+  useEffect(() => {
+    fetch(GEO_URL_PRIMARY)
+      .then(r => { if (!r.ok) throw new Error(); return r.json() })
+      .then(setGeoData)
+      .catch(() =>
+        fetch(GEO_URL_FALLBACK)
+          .then(r => { if (!r.ok) throw new Error(); return r.json() })
+          .then(setGeoData)
+          .catch(() => setLoadErr(true))
+      )
+  }, [])
+
+  const norm = (s = '') => {
+    if (!s) return ''
+    const lower = s.toLowerCase().trim()
+    if (EN_NORM[lower]) return EN_NORM[lower]
+    return lower
+      .replace(/oblast|oblysy|region|область|облысы|қаласы|province/gi, '')
+      .replace(/[-\s]+/g, '')
+      .replace(/[іІ]/g, 'и')   // Kazakh і → Russian и
+      .replace(/[ұҰ]/g, 'у')   // Kazakh ұ → Russian у
+      .replace(/[үҮ]/g, 'у')   // Kazakh ү → Russian у
+  }
+
+  const getFeatName = (f) =>
+    f.properties.shapeName || f.properties.NAME_1 || f.properties.name || ''
+
+  const byNorm = {}
+  regions.forEach(r => { if (r.name) byNorm[norm(r.name)] = r })
+
+  const findRegion = (name = '') => {
+    if (!name) return null
+    const n = norm(name)
+    if (!n) return null
+    if (byNorm[n]) return byNorm[n]
+    for (const [k, v] of Object.entries(byNorm)) {
+      if (k.length > 2 && (k.includes(n) || n.includes(k))) return v
+    }
+    return null
+  }
+
+  const maxCount = Math.max(...regions.map(r => r.count || 0), 1)
+
+  const getStyle = (feature) => {
+    const r = findRegion(getFeatName(feature))
+    const isActive = r && activeKeys.some(f => f.dim === 'region' && f.val === r.code)
+    const intensity = r ? r.count / maxCount : 0
+    const lightness = Math.round(78 - intensity * 50)
+    return {
+      fillColor: isActive ? TEAL_DARK : r ? `hsl(182,73%,${lightness}%)` : '#e5e7eb',
+      weight: 1.5,
+      color: '#fff',
+      fillOpacity: 0.88,
+    }
+  }
+
+  const onEachFeature = (feature, layer) => {
+    const name = getFeatName(feature)
+    const r = findRegion(name)
+    const label = r ? `<b>${r.name}</b><br/>${fmt(r.count)} чел.` : name
+    layer.bindTooltip(label, { sticky: true, className: 'kz-tooltip' })
+    if (r) {
+      layer.on('click', () => onToggle('region', r.code))
+      layer.on('mouseover', function () { this.setStyle({ fillOpacity: 0.65 }) })
+      layer.on('mouseout',  function () { this.setStyle(getStyle(feature)) })
+    }
+  }
+
+  if (loadErr) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted)', fontSize: 13 }}>
+      Не удалось загрузить карту
+    </div>
+  )
+
+  if (!geoData) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted)', fontSize: 13 }}>
+      Загрузка карты…
+    </div>
+  )
+
+  return (
+    <MapContainer
+      center={[48.5, 67.5]}
+      zoom={4}
+      style={{ height: 480, width: '100%' }}
+      scrollWheelZoom={false}
+      zoomControl
+    >
+      <InvalidateSize />
+      <TileLayer
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      />
+      <GeoJSON
+        key={`${JSON.stringify(activeKeys)}-${regions.length}`}
+        data={geoData}
+        style={getStyle}
+        onEachFeature={onEachFeature}
+      />
+    </MapContainer>
+  )
+}
+
+function InvalidateSize() {
+  const map = useMap()
+  useEffect(() => {
+    map.invalidateSize()
+    const t = setTimeout(() => map.invalidateSize(), 300)
+    return () => clearTimeout(t)
+  }, [map])
+  return null
+}
+
 function RegionsBarChart({ data }) {
   if (!data?.length) return <EmptyState />
   return (
@@ -382,7 +646,9 @@ function RegionsBarChart({ data }) {
 export default function Dashboard({ globalFilters = [] }) {
   const [base, setBase] = useState({
     kpis: null, statuses: [], regions: [], ageGroups: [],
-    cats: [], gender: [], okved: [], nationality: [],
+    cats: [], gender: [], familyType: [],
+    edu: { vuz: [], tipo: [], school: [] },
+    okved: [], nkz: [], nationality: [], migration: [],
   })
   const [activeFilters, setActiveFilters] = useState([])
   const [filteredData, setFilteredData] = useState(null)
@@ -390,15 +656,21 @@ export default function Dashboard({ globalFilters = [] }) {
 
   const [leftTab, setLeftTab] = useState('statuses')
   const [rightTab, setRightTab] = useState('age')
-  const [bottomTab, setBottomTab] = useState('cat')
+  const [eduTab, setEduTab] = useState('vuz')
 
   const loadBase = useCallback(async () => {
     try {
-      const [k, s, r, a, c, g, o, n] = await Promise.all([
+      const [k, s, r, a, c, g, ft, o, z, n, ev, et, es, mg] = await Promise.all([
         getKpis(), getStatuses(), getRegions(),
-        getAgeGroups(), getCategorization(), getGender(), getOkved(), getNationality(),
+        getAgeGroups(), getCategorization(), getGender(), getFamilyType(), getOkved(), getNkz(), getNationality(),
+        getEdu('vuz'), getEdu('tipo'), getEdu('school'), getMigration(),
       ])
-      setBase({ kpis: k.data, statuses: s.data, regions: r.data, ageGroups: a.data, cats: c.data, gender: g.data, okved: o.data, nationality: n.data })
+      setBase({
+        kpis: k.data, statuses: s.data, regions: r.data, ageGroups: a.data,
+        cats: c.data, gender: g.data, familyType: ft.data,
+        edu: { vuz: ev.data || [], tipo: et.data || [], school: es.data || [] },
+        okved: o.data, nkz: z.data, nationality: n.data, migration: mg.data || [],
+      })
     } catch {}
   }, [])
 
@@ -434,7 +706,12 @@ export default function Dashboard({ globalFilters = [] }) {
   const gender = fd?.gender || base.gender
   const cats = fd?.categorization || base.cats
   const okved = fd?.okved || base.okved
+  const nkz = fd?.nkz || base.nkz
   const nationality = fd?.nationality || base.nationality
+  const familyType = Array.isArray(fd?.family_type) ? fd.family_type : Array.isArray(base.familyType) ? base.familyType : []
+  const vuzData    = Array.isArray(fd?.edu?.vuz)    ? fd.edu.vuz    : base.edu.vuz
+  const tipoData   = Array.isArray(fd?.edu?.tipo)   ? fd.edu.tipo   : base.edu.tipo
+  const schoolData = Array.isArray(fd?.edu?.school) ? fd.edu.school : base.edu.school
 
   const af = activeFilters
 
@@ -446,9 +723,13 @@ export default function Dashboard({ globalFilters = [] }) {
       {/* KPIs */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <KpiCard title="Количество ФЛ" main={kpis?.total_persons} />
-        <KpiCard title="Работающие" main={kpis?.working} sub={kpis?.active_contracts} subLabel="Активный ТД" />
+        <KpiCard title="Работающие" main={kpis?.working} sub={kpis?.active_contracts} subLabel="Активный ТД"
+          onSubClick={() => toggleFilter('status', 'АКТИВНЫЙ ТД')}
+          activeFilter={af.some(f => f.dim === 'status' && f.val === 'АКТИВНЫЙ ТД')} />
         <KpiCard title="Средняя ЗП" main={kpis?.avg_salary} />
-        <KpiCard title="ВУЗ" main={kpis?.students} sub={kpis?.tipo_count} subLabel="ТИПО" />
+        <KpiCard title="ВУЗ" main={kpis?.students} sub={kpis?.tipo_count} subLabel="ТИПО"
+          onSubClick={() => toggleFilter('status', 'ТИПО')}
+          activeFilter={af.some(f => f.dim === 'status' && f.val === 'ТИПО')} />
         <KpiCard
           title="Средний возраст"
           main={kpis?.avg_age != null ? Math.round(kpis.avg_age) : null}
@@ -459,108 +740,167 @@ export default function Dashboard({ globalFilters = [] }) {
 
       {/* Main panels */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-        <Card style={{ padding: '16px 20px' }}>
+        <Card style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column' }}>
           <Tabs tabs={[
             { key: 'statuses', label: 'Статусы' },
             { key: 'regions', label: 'Регионы' },
             { key: 'okved', label: 'ОКЭД' },
+            { key: 'nkz', label: 'НКЗ' },
             { key: 'nationality', label: 'Национальность' },
           ]} active={leftTab} onChange={setLeftTab} />
 
-          {leftTab === 'statuses' && <>
+          {leftTab === 'statuses' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <SectionTitle>Рейтинг статусов — нажмите для фильтрации</SectionTitle>
             <StatusChart data={statuses} activeKeys={af} onToggle={toggleFilter} />
-          </>}
-          {leftTab === 'regions' && <>
+          </div>}
+          {leftTab === 'regions' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <SectionTitle>Регионы — нажмите для фильтрации</SectionTitle>
             <RegionTable data={regions} activeKeys={af} onToggle={toggleFilter} />
-          </>}
-          {leftTab === 'okved' && <>
-            <SectionTitle>ОКЭД (топ-10) — нажмите для фильтрации</SectionTitle>
-            <OkvedChart data={okved} activeKeys={af} onToggle={toggleFilter} />
-          </>}
-          {leftTab === 'nationality' && <>
-            <SectionTitle>Национальность (топ-15) — нажмите для фильтрации</SectionTitle>
+          </div>}
+          {leftTab === 'okved' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <SectionTitle>ОКЭД  — нажмите для фильтрации</SectionTitle>
+            <OkvedChart data={okved} activeKeys={af} dimKey="okved" onToggle={toggleFilter} />
+          </div>}
+          {leftTab === 'nkz' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <SectionTitle>НКЗ  — нажмите для фильтрации</SectionTitle>
+            <OkvedChart data={nkz} activeKeys={af} dimKey="nkz" onToggle={toggleFilter} />
+          </div>}
+          {leftTab === 'nationality' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <SectionTitle>Национальность  — нажмите для фильтрации</SectionTitle>
             <NationalityTable data={nationality} activeKeys={af} onToggle={toggleFilter} />
-          </>}
+          </div>}
         </Card>
 
-        <Card style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column' }}>
-          <Tabs tabs={[
-            { key: 'age', label: 'Возраст' },
-            { key: 'gender', label: 'Пол' },
-          ]} active={rightTab} onChange={setRightTab} />
+        <Card style={{ padding: '16px 20px' }}>
+          <SectionTitle>Карта регионов — нажмите для фильтрации</SectionTitle>
+          {/* position:relative + zIndex:0 — stacking context, чтобы z-index Leaflet не перекрывал фикс. меню */}
+          <div style={{ position: 'relative', zIndex: 0, marginTop: 70}}>
+            <KazakhstanMap regions={regions} activeKeys={af} onToggle={toggleFilter} />
+          </div>
+        </Card>
+      </div>
 
-          {rightTab === 'age' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <SectionTitle>Распределение по возрасту — нажмите для фильтрации</SectionTitle>
-            <AgeBar data={ageGroups} activeKeys={af} onToggle={toggleFilter} />
-            {ageGroups.length > 0 && (
-              <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                {ageGroups.map((g) => {
-                  const isActive = af.some(f => f.dim === 'age_group' && f.val === g.group)
-                  return (
-                    <div key={g.group} onClick={() => toggleFilter('age_group', g.group)} style={{
-                      background: isActive ? TEAL : 'var(--teal-light)',
-                      borderRadius: 8, padding: '10px 16px', flex: 1, textAlign: 'center', minWidth: 80,
-                      cursor: 'pointer', border: isActive ? `2px solid ${TEAL_DARK}` : '2px solid transparent',
-                    }}>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: isActive ? '#fff' : TEAL }}>{fmt(g.count)}</div>
-                      <div style={{ fontSize: 11, color: isActive ? 'rgba(255,255,255,.8)' : 'var(--muted)', marginTop: 2 }}>{g.group} лет</div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>}
+      {/* Age / Gender / Family type / Cat / Regions / Migration */}
+      <Card style={{ padding: '16px 20px', marginBottom: 12, display: 'flex', flexDirection: 'column' }}>
+        <Tabs tabs={[
+          { key: 'age',           label: 'Возраст' },
+          { key: 'gender',        label: 'Пол' },
+          { key: 'family_type',   label: 'Тип семьи' },
+          { key: 'cat',           label: 'Категоризация' },
+          { key: 'regions_chart', label: 'Регионы' },
+          { key: 'migration',     label: 'Миграция' },
+        ]} active={rightTab} onChange={setRightTab} />
 
-          {rightTab === 'gender' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <SectionTitle>Распределение по полу — нажмите для фильтрации</SectionTitle>
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
-              <DonutChart data={gender} nameKey="gender" activeKeys={af} dimKey="gender" onToggle={toggleFilter} />
-            </div>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {gender.map((g) => {
-                const isActive = af.some(f => f.dim === 'gender' && f.val === g.gender)
+        {rightTab === 'age' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <SectionTitle>Распределение по возрасту — нажмите для фильтрации</SectionTitle>
+          <AgeBar data={ageGroups} activeKeys={af} onToggle={toggleFilter} />
+          {ageGroups.length > 0 && (
+            <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {ageGroups.map((g) => {
+                const isActive = af.some(f => f.dim === 'age_group' && f.val === g.group)
                 return (
-                  <div key={g.gender} onClick={() => toggleFilter('gender', g.gender)} style={{
-                    background: isActive ? TEAL : 'var(--teal-light)', borderRadius: 8,
-                    padding: '12px 16px', flex: 1, textAlign: 'center', cursor: 'pointer',
-                    border: isActive ? `2px solid ${TEAL_DARK}` : '2px solid transparent',
+                  <div key={g.group} onClick={() => toggleFilter('age_group', g.group)} style={{
+                    background: isActive ? TEAL : 'var(--teal-light)',
+                    borderRadius: 8, padding: '10px 16px', flex: 1, textAlign: 'center', minWidth: 80,
+                    cursor: 'pointer', border: isActive ? `2px solid ${TEAL_DARK}` : '2px solid transparent',
                   }}>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: isActive ? '#fff' : TEAL }}>{fmt(g.count)}</div>
-                    <div style={{ fontSize: 11, color: isActive ? 'rgba(255,255,255,.8)' : 'var(--muted)', marginTop: 2 }}>{g.gender}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: isActive ? '#fff' : TEAL }}>{fmt(g.count)}</div>
+                    <div style={{ fontSize: 11, color: isActive ? 'rgba(255,255,255,.8)' : 'var(--muted)', marginTop: 2 }}>{g.group} лет</div>
                   </div>
                 )
               })}
             </div>
-          </div>}
-        </Card>
-      </div>
+          )}
+        </div>}
 
-      {/* Bottom panel */}
-      <Card style={{ padding: '16px 20px' }}>
-        <Tabs tabs={[
-          { key: 'cat', label: 'Категоризация (SDU_TZHS)' },
-          { key: 'regions_chart', label: 'Регионы (график)' },
-        ]} active={bottomTab} onChange={setBottomTab} />
+        {rightTab === 'gender' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <SectionTitle>Распределение по полу — нажмите для фильтрации</SectionTitle>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+            <DonutChart data={gender} nameKey="gender" activeKeys={af} dimKey="gender" onToggle={toggleFilter} />
+          </div>
+          <div style={{ display: 'flex', gap: 12 }}>
+            {gender.map((g) => {
+              const isActive = af.some(f => f.dim === 'gender' && f.val === g.gender)
+              return (
+                <div key={g.gender} onClick={() => toggleFilter('gender', g.gender)} style={{
+                  background: isActive ? TEAL : 'var(--teal-light)', borderRadius: 8,
+                  padding: '12px 16px', flex: 1, textAlign: 'center', cursor: 'pointer',
+                  border: isActive ? `2px solid ${TEAL_DARK}` : '2px solid transparent',
+                }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: isActive ? '#fff' : TEAL }}>{fmt(g.count)}</div>
+                  <div style={{ fontSize: 11, color: isActive ? 'rgba(255,255,255,.8)' : 'var(--muted)', marginTop: 2 }}>{g.gender}</div>
+                </div>
+              )
+            })}
+          </div>
+        </div>}
 
-        {bottomTab === 'cat' && (
+        {rightTab === 'family_type' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <SectionTitle>Тип семьи — нажмите для фильтрации</SectionTitle>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+            <DonutChart data={familyType} nameKey="family_type" activeKeys={af} dimKey="family_type" onToggle={toggleFilter} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            {familyType.map((ft) => {
+              const isActive = af.some(f => f.dim === 'family_type' && f.val === ft.family_type)
+              return (
+                <div key={ft.family_type} onClick={() => toggleFilter('family_type', ft.family_type)} style={{
+                  background: isActive ? TEAL : 'var(--teal-light)', borderRadius: 8,
+                  padding: '8px 12px', flex: '1 1 120px', textAlign: 'center', cursor: 'pointer',
+                  border: isActive ? `2px solid ${TEAL_DARK}` : '2px solid transparent',
+                }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: isActive ? '#fff' : TEAL }}>{fmt(ft.count)}</div>
+                  <div style={{ fontSize: 10, color: isActive ? 'rgba(255,255,255,.8)' : 'var(--muted)', marginTop: 2 }}>{ft.family_type}</div>
+                </div>
+              )
+            })}
+          </div>
+        </div>}
+
+        {rightTab === 'cat' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
             <div>
               <SectionTitle>Категоризация домохозяйств — нажмите для фильтрации</SectionTitle>
               <DonutChart data={cats} nameKey="category" colorMap={CAT_COLORS} labelMap={CAT_LABELS} activeKeys={af} dimKey="cat" onToggle={toggleFilter} />
             </div>
             <div>
-              <SectionTitle>Таблица</SectionTitle>
               <CatTable data={cats} activeKeys={af} onToggle={toggleFilter} />
             </div>
           </div>
         )}
-        {bottomTab === 'regions_chart' && <>
+
+        {rightTab === 'regions_chart' && <>
           <SectionTitle>Количество молодежи по регионам</SectionTitle>
           <RegionsBarChart data={regions} />
         </>}
+
+        {rightTab === 'migration' && <>
+          <SectionTitle>Миграция по регионам</SectionTitle>
+          <MigrationTable data={base.migration} />
+        </>}
       </Card>
+
+      {/* Education block */}
+      <Card style={{ padding: '16px 20px', marginBottom: 12, display: 'flex', flexDirection: 'column', minHeight: 300 }}>
+        <Tabs tabs={[
+          { key: 'vuz',    label: 'ВУЗ' },
+          { key: 'tipo',   label: 'ТИПО' },
+          { key: 'school', label: 'Школа' },
+        ]} active={eduTab} onChange={setEduTab} />
+        {eduTab === 'vuz' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>ВУЗ — нажмите для фильтрации</SectionTitle>
+          <EduTable data={vuzData} dimKey="vuz" activeKeys={af} onToggle={toggleFilter} totalOverride={kpis?.students} />
+        </div>}
+        {eduTab === 'tipo' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>ТИПО — нажмите для фильтрации</SectionTitle>
+          <EduTable data={tipoData} dimKey="tipo" activeKeys={af} onToggle={toggleFilter} totalOverride={kpis?.tipo_count} />
+        </div>}
+        {eduTab === 'school' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>Школа — нажмите для фильтрации</SectionTitle>
+          <EduTable data={schoolData} dimKey="school" activeKeys={af} onToggle={toggleFilter} />
+        </div>}
+      </Card>
+
     </div>
   )
 }

@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import (
-    AgeDistribution, Categorization, DistrictBreakdown,
-    GenderStats, KpiStats, MicroAgg, NatAgg, NationalityStats, OkvedAgg, OkvedStats,
+    AgeDistribution, Categorization, DistrictBreakdown, EduAgg,
+    GenderStats, KpiStats, MicroAgg, MigrationStats, NatAgg, NationalityStats, NkzAgg, OkvedAgg, OkvedStats,
     RegionBreakdown, StatusBreakdown, UploadSession, User,
 )
 
@@ -24,6 +24,13 @@ Base.metadata.create_all(bind=engine)
 
 # Runtime migrations: add columns that may not exist in older DB schemas
 from sqlalchemy import text as _text
+_NEW_COLS = [
+    ("asp_count",        "INTEGER DEFAULT 0"),
+    ("pensioner_count",  "INTEGER DEFAULT 0"),
+    ("kandas_count",     "INTEGER DEFAULT 0"),
+    ("mnogodetnyi_count","INTEGER DEFAULT 0"),
+    ("cbd_count",        "INTEGER DEFAULT 0"),
+]
 _migrations = [
     ("okved_agg", "region_name",    "VARCHAR(120) DEFAULT ''"),
     ("okved_agg", "contract_count", "INTEGER DEFAULT 0"),
@@ -37,6 +44,16 @@ _migrations = [
     ("nat_agg",   "salary_count",   "INTEGER DEFAULT 0"),
     ("nat_agg",   "age_sum",        "FLOAT DEFAULT 0.0"),
     ("nat_agg",   "age_count",      "INTEGER DEFAULT 0"),
+] + [
+    (tbl, col, typ)
+    for tbl in ("micro_agg", "okved_agg", "nat_agg")
+    for col, typ in _NEW_COLS
+] + [
+    ("micro_agg", "family_type", "VARCHAR(120) DEFAULT ''"),
+    ("nkz_agg",  "salary_sum",   "FLOAT DEFAULT 0.0"),
+    ("nkz_agg",  "salary_count", "INTEGER DEFAULT 0"),
+    ("nkz_agg",  "age_sum",      "FLOAT DEFAULT 0.0"),
+    ("nkz_agg",  "age_count",    "INTEGER DEFAULT 0"),
 ]
 with engine.connect() as _conn:
     for _tbl, _col, _typ in _migrations:
@@ -292,7 +309,7 @@ def reprocess_session(
 
     for model in [KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
                   AgeDistribution, Categorization, GenderStats, OkvedStats,
-                  NationalityStats, MicroAgg, OkvedAgg, NatAgg]:
+                  NationalityStats, MicroAgg, OkvedAgg, NatAgg, NkzAgg, EduAgg, MigrationStats]:
         db.query(model).filter(model.session_id == session_id).delete(synchronize_session=False)
     db.commit()
 
@@ -371,16 +388,29 @@ def get_statuses(db: Session = Depends(get_db), _: User = Depends(get_current_us
 
 @app.get("/api/data/regions")
 def get_regions(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    from sqlalchemy import func
     sid = get_active_session_id(db)
     if not sid:
         return []
     rows = (
-        db.query(RegionBreakdown)
-        .filter(RegionBreakdown.session_id == sid)
-        .order_by(RegionBreakdown.count.desc())
+        db.query(
+            MicroAgg.region_code, MicroAgg.region_name,
+            func.sum(MicroAgg.total_count).label("c"),
+            func.sum(MicroAgg.salary_sum).label("sal_sum"),
+            func.sum(MicroAgg.salary_count).label("sal_cnt"),
+        )
+        .filter(MicroAgg.session_id == sid, MicroAgg.region_code != '')
+        .group_by(MicroAgg.region_code, MicroAgg.region_name)
+        .order_by(func.sum(MicroAgg.total_count).desc())
         .all()
     )
-    return [{"code": r.region_code, "name": r.region_name, "count": r.count} for r in rows]
+    return [
+        {
+            "code": r.region_code, "name": r.region_name, "count": int(r.c),
+            "avg_salary": round(float(r.sal_sum) / int(r.sal_cnt)) if (r.sal_cnt and int(r.sal_cnt) > 0) else 0,
+        }
+        for r in rows
+    ]
 
 
 @app.get("/api/data/districts")
@@ -445,22 +475,101 @@ def get_gender(db: Session = Depends(get_db), _: User = Depends(get_current_user
 
 @app.get("/api/data/okved")
 def get_okved(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    from sqlalchemy import func
     sid = get_active_session_id(db)
     if not sid:
         return []
     rows = (
-        db.query(OkvedStats)
-        .filter(OkvedStats.session_id == sid)
-        .order_by(OkvedStats.count.desc())
+        db.query(
+            OkvedAgg.okved,
+            func.sum(OkvedAgg.total_count).label("c"),
+            func.sum(OkvedAgg.salary_sum).label("sal_sum"),
+            func.sum(OkvedAgg.salary_count).label("sal_cnt"),
+        )
+        .filter(OkvedAgg.session_id == sid, OkvedAgg.okved != '')
+        .group_by(OkvedAgg.okved)
+        .order_by(func.sum(OkvedAgg.total_count).desc())
         .limit(20)
         .all()
     )
-    return [{"name": r.okved_name, "count": r.count} for r in rows]
+    return [
+        {
+            "name": r.okved, "count": int(r.c),
+            "avg_salary": round(float(r.sal_sum) / int(r.sal_cnt)) if (r.sal_cnt and int(r.sal_cnt) > 0) else 0,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/data/nkz")
+def get_nkz(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    from sqlalchemy import func
+    sid = get_active_session_id(db)
+    if not sid:
+        return []
+    rows = (
+        db.query(
+            NkzAgg.nkz,
+            func.sum(NkzAgg.total_count).label("c"),
+            func.sum(NkzAgg.salary_sum).label("sal_sum"),
+            func.sum(NkzAgg.salary_count).label("sal_cnt"),
+        )
+        .filter(NkzAgg.session_id == sid, NkzAgg.nkz != '')
+        .group_by(NkzAgg.nkz)
+        .order_by(func.sum(NkzAgg.total_count).desc())
+        .limit(20)
+        .all()
+    )
+    return [
+        {
+            "name": r.nkz, "count": int(r.c),
+            "avg_salary": round(float(r.sal_sum) / int(r.sal_cnt)) if (r.sal_cnt and int(r.sal_cnt) > 0) else 0,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/data/family-type")
+def get_family_type(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    from sqlalchemy import func
+    sid = get_active_session_id(db)
+    if not sid:
+        return []
+    rows = (
+        db.query(MicroAgg.family_type, func.sum(MicroAgg.total_count).label("c"))
+        .filter(MicroAgg.session_id == sid, MicroAgg.family_type != '')
+        .group_by(MicroAgg.family_type)
+        .order_by(func.sum(MicroAgg.total_count).desc())
+        .all()
+    )
+    return [{"family_type": r.family_type, "count": int(r.c)} for r in rows]
+
+
+@app.get("/api/data/edu")
+def get_edu(
+    edu_type: str = "vuz",
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    from sqlalchemy import func
+    sid = get_active_session_id(db)
+    if not sid:
+        return []
+    rows = (
+        db.query(EduAgg.edu_name, func.sum(EduAgg.total_count).label("c"))
+        .filter(EduAgg.session_id == sid, EduAgg.edu_type == edu_type, EduAgg.edu_name != '')
+        .group_by(EduAgg.edu_name)
+        .order_by(func.sum(EduAgg.total_count).desc())
+        .all()
+    )
+    return [{"name": r.edu_name, "count": int(r.c)} for r in rows]
 
 
 _STATUS_COUNT_COL = {
     "РАБОТАЮЩИЕ": "working_count",
+    "АКТИВНЫЙ ТД": "contract_count",
     "СТУДЕНТ": "student_count",
+    "ТИПО": "tipo_count",
     "ИП": "ip_count",
     "ЛСИ": "lsi_count",
     "БЕЗРАБОТНЫЕ": "unemployed_count",
@@ -469,7 +578,12 @@ _STATUS_COUNT_COL = {
     "ИНОСТРАННЫЕ ГРАЖДАНЕ": "foreign_count",
     "БЕРЕМЕННЫЕ": "pregnant_count",
     "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3": "uhod_count",
-    "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": "berkut_count",
+    "ПО УХОДУ ЗА ЛСИ": "berkut_count",
+    "ПОЛУЧАТЕЛИ АСП": "asp_count",
+    "ПЕНСИОНЕРЫ": "pensioner_count",
+    "КАНДАСЫ": "kandas_count",
+    "МНОГОДЕТНЫЕ": "mnogodetnyi_count",
+    "ПОЛУЧАТЕЛИ ПОСОБИЙ": "cbd_count",
 }
 _DIM_COL = {
     "region": "region_code",
@@ -478,17 +592,23 @@ _DIM_COL = {
     "gender": "gender",
     "cat": "category",
     "okved": "okved",
+    "nkz": "nkz",
     "nationality": "nationality",
+    "family_type": "family_type",
 }
 
 
 def _get_primary_table(filters, sid, db):
-    """Route to OkvedAgg/NatAgg when those dims are in the filter list."""
+    """Route to OkvedAgg/NatAgg/NkzAgg/EduAgg when those dims are in the filter list."""
     for dim, _ in filters:
         if dim == "okved":
             return OkvedAgg, db.query(OkvedAgg).filter(OkvedAgg.session_id == sid)
+        if dim == "nkz":
+            return NkzAgg, db.query(NkzAgg).filter(NkzAgg.session_id == sid)
         if dim == "nationality":
             return NatAgg, db.query(NatAgg).filter(NatAgg.session_id == sid)
+        if dim in ("vuz", "tipo", "school"):
+            return EduAgg, db.query(EduAgg).filter(EduAgg.session_id == sid)
     return MicroAgg, db.query(MicroAgg).filter(MicroAgg.session_id == sid)
 
 
@@ -501,10 +621,14 @@ def _build_filtered_query(q, T, filters):
             col_name = _STATUS_COUNT_COL.get(val)
             if col_name and hasattr(T, col_name):
                 cnt_col = getattr(T, col_name)
+                q = q.filter(getattr(T, col_name) > 0)
         elif dim in _DIM_COL:
             attr = _DIM_COL[dim]
             if hasattr(T, attr):
                 q = q.filter(getattr(T, attr) == val)
+        elif dim in ("vuz", "tipo", "school"):
+            if hasattr(T, "edu_type") and hasattr(T, "edu_name"):
+                q = q.filter(T.edu_type == dim, T.edu_name == val)
         elif dim == "age_exact":
             try:
                 if hasattr(T, "age_val"):
@@ -609,6 +733,11 @@ def get_filtered_data(
         func.sum(c("pregnant_count")).label("pregnant"),
         func.sum(c("uhod_count")).label("uhod"),
         func.sum(c("berkut_count")).label("berkut"),
+        func.sum(c("asp_count")).label("asp"),
+        func.sum(c("pensioner_count")).label("pensioner"),
+        func.sum(c("kandas_count")).label("kandas"),
+        func.sum(c("mnogodetnyi_count")).label("mnogodetnyi"),
+        func.sum(c("cbd_count")).label("cbd"),
     ).first()
 
     statuses_raw = {
@@ -622,11 +751,20 @@ def get_filtered_data(
         "ИНОСТРАННЫЕ ГРАЖДАНЕ": int(st.foreign or 0),
         "БЕРЕМЕННЫЕ": int(st.pregnant or 0),
         "ПО УХОДУ ЗА РЕБЕНКОМ ДО 3": int(st.uhod or 0),
-        "ПО УХОДУ ЗА РЕБЕНКОМ ИНВ": int(st.berkut or 0),
+        "ПО УХОДУ ЗА ЛСИ": int(st.berkut or 0),
+        "ПОЛУЧАТЕЛИ АСП": int(st.asp or 0),
+        "ПЕНСИОНЕРЫ": int(st.pensioner or 0),
+        "КАНДАСЫ": int(st.kandas or 0),
+        "МНОГОДЕТНЫЕ": int(st.mnogodetnyi or 0),
+        "ПОЛУЧАТЕЛИ ПОСОБИЙ": int(st.cbd or 0),
     }
 
     region_rows = (
-        q.with_entities(c("region_code"), c("region_name"), func.sum(cnt_col).label("c"))
+        q.with_entities(
+            c("region_code"), c("region_name"), func.sum(cnt_col).label("c"),
+            func.sum(c("salary_sum")).label("sal_sum"),
+            func.sum(c("salary_count")).label("sal_cnt"),
+        )
         .group_by(c("region_code"), c("region_name"))
         .order_by(func.sum(cnt_col).desc()).all()
     )
@@ -643,12 +781,27 @@ def get_filtered_data(
         .group_by(c("age_group")).all()
     )
 
+    # family_type always from MicroAgg
+    qf_base = db.query(MicroAgg).filter(MicroAgg.session_id == sid)
+    qf, cnt_col_f = _build_filtered_query(qf_base, MicroAgg, filters)
+    fam_rows = (
+        qf.filter(MicroAgg.family_type != '')
+        .with_entities(MicroAgg.family_type, func.sum(cnt_col_f).label("c"))
+        .group_by(MicroAgg.family_type)
+        .order_by(func.sum(cnt_col_f).desc())
+        .all()
+    )
+
     # ── OKVED and Nationality always from their dedicated tables ─────────────
     qo, cnt_col_o = _build_filtered_query(
         db.query(OkvedAgg).filter(OkvedAgg.session_id == sid), OkvedAgg, filters)
     okved_rows = (
         qo.filter(OkvedAgg.okved != "")
-        .with_entities(OkvedAgg.okved, func.sum(cnt_col_o).label("c"))
+        .with_entities(
+            OkvedAgg.okved, func.sum(cnt_col_o).label("c"),
+            func.sum(OkvedAgg.salary_sum).label("sal_sum"),
+            func.sum(OkvedAgg.salary_count).label("sal_cnt"),
+        )
         .group_by(OkvedAgg.okved)
         .order_by(func.sum(cnt_col_o).desc())
         .limit(20).all()
@@ -664,8 +817,41 @@ def get_filtered_data(
         .limit(20).all()
     )
 
+    qz, cnt_col_z = _build_filtered_query(
+        db.query(NkzAgg).filter(NkzAgg.session_id == sid), NkzAgg, filters)
+    nkz_rows = (
+        qz.filter(NkzAgg.nkz != "")
+        .with_entities(
+            NkzAgg.nkz, func.sum(cnt_col_z).label("c"),
+            func.sum(NkzAgg.salary_sum).label("sal_sum"),
+            func.sum(NkzAgg.salary_count).label("sal_cnt"),
+        )
+        .group_by(NkzAgg.nkz)
+        .order_by(func.sum(cnt_col_z).desc())
+        .limit(20).all()
+    )
+
+    def _edu_rows(edu_type_val):
+        qe, cnt_col_e = _build_filtered_query(
+            db.query(EduAgg).filter(EduAgg.session_id == sid, EduAgg.edu_type == edu_type_val),
+            EduAgg, filters,
+        )
+        rows = (
+            qe.filter(EduAgg.edu_name != '')
+            .with_entities(EduAgg.edu_name, func.sum(cnt_col_e).label("c"))
+            .group_by(EduAgg.edu_name)
+            .order_by(func.sum(cnt_col_e).desc())
+            .limit(100)
+            .all()
+        )
+        return [{"name": r.edu_name, "count": int(r.c)} for r in rows]
+
     age_order = ["14-17", "18-24", "25-29", "30-35"]
     age_map = {r.age_group: int(r.c) for r in age_rows}
+
+    def _avg_sal(row):
+        s, n = float(row.sal_sum or 0), int(row.sal_cnt or 0)
+        return round(s / n) if n > 0 else 0
 
     result = {
         "kpis": kpis,
@@ -675,19 +861,40 @@ def get_filtered_data(
             if v > 0
         ],
         "regions": [
-            {"code": r.region_code, "name": r.region_name, "count": int(r.c)}
+            {"code": r.region_code, "name": r.region_name, "count": int(r.c), "avg_salary": _avg_sal(r)}
             for r in region_rows
         ],
         "gender": [{"gender": r.gender, "count": int(r.c)} for r in gender_rows],
+        "family_type": [{"family_type": r.family_type, "count": int(r.c)} for r in fam_rows],
         "categorization": [{"category": r.category, "count": int(r.c)} for r in cat_rows],
         "age_groups": [{"group": g, "count": age_map.get(g, 0)} for g in age_order],
-        "okved": [{"name": r.okved, "count": int(r.c)} for r in okved_rows],
+        "okved": [{"name": r.okved, "count": int(r.c), "avg_salary": _avg_sal(r)} for r in okved_rows],
+        "nkz": [{"name": r.nkz, "count": int(r.c), "avg_salary": _avg_sal(r)} for r in nkz_rows],
         "nationality": [{"nationality": r.nationality, "count": int(r.c)} for r in nat_rows],
+        "edu": {
+            "vuz":    _edu_rows("vuz"),
+            "tipo":   _edu_rows("tipo"),
+            "school": _edu_rows("school"),
+        },
     }
 
     with _filter_cache_lock:
         _filter_cache[cache_key] = result
     return result
+
+
+@app.get("/api/data/migration")
+def get_migration(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    sid = get_active_session_id(db)
+    if not sid:
+        return []
+    rows = (
+        db.query(MigrationStats)
+        .filter(MigrationStats.session_id == sid)
+        .order_by(MigrationStats.departed.desc())
+        .all()
+    )
+    return [{"region": r.region_name, "departed": r.departed, "arrived": r.arrived} for r in rows]
 
 
 @app.get("/api/data/nationality")

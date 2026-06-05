@@ -370,7 +370,7 @@ const td = { padding: '8px 8px', verticalAlign: 'middle' }
 export default function Admin() {
   return (
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
-      <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20 }}>Управление</h1>
+      
       <UserSection />
       <UploadSection />
     </div>
