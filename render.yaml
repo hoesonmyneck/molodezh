@@ -4,11 +4,11 @@ services:
     runtime: python
     buildCommand: |
       cd frontend && npm install && npm run build && cd ../backend && pip install -r requirements.txt
-    startCommand: cd backend && python main.py
+    startCommand: rm -rf /data/uploads/* ; cd backend && python main.py
     envVars:
       - key: PORT
         value: 8002
     disk:
       name: data
       mountPath: /data
-      sizeGB: 1
+      sizeGB: 2

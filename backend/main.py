@@ -1,6 +1,21 @@
 import os
 import shutil
 import threading
+
+# ── Startup: free disk space if /data is nearly full so SQLite can operate ────
+def _emergency_cleanup():
+    try:
+        stat = os.statvfs("/data")
+        free_pct = stat.f_bavail / stat.f_blocks if stat.f_blocks else 1
+        if free_pct < 0.10:          # less than 10% free → clean uploads
+            upload_dir = "/data/uploads"
+            if os.path.isdir(upload_dir):
+                shutil.rmtree(upload_dir, ignore_errors=True)
+                os.makedirs(upload_dir, exist_ok=True)
+    except Exception:
+        pass
+
+_emergency_cleanup()
 from datetime import datetime, timedelta
 from typing import List
 
