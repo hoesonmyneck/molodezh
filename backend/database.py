@@ -14,11 +14,16 @@ from sqlalchemy import event as _event
 @_event.listens_for(engine, "connect")
 def _set_sqlite_pragma(dbapi_conn, _):
     cur = dbapi_conn.cursor()
-    cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA cache_size=-65536")    # 64 MB page cache
-    cur.execute("PRAGMA mmap_size=268435456")  # 256 MB mmap
-    cur.execute("PRAGMA synchronous=NORMAL")
-    cur.close()
+    try:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA cache_size=-65536")    # 64 MB page cache
+        cur.execute("PRAGMA mmap_size=268435456")  # 256 MB mmap
+        cur.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        # Disk may be full — pragmas are optimisations, not required for basic operation
+        pass
+    finally:
+        cur.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
