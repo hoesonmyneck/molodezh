@@ -224,9 +224,11 @@ function OkvedChart({ data, activeKeys, dimKey = 'okved', onToggle }) {
     )
   }
 
+  const chartH = top.length * 38 + 20
+
   return (
-    <div style={{ flex: 1, minHeight: 200 }}>
-    <ResponsiveContainer width="100%" height="100%">
+    <div>
+    <ResponsiveContainer width="100%" height={chartH}>
       <BarChart data={top} layout="vertical" margin={{ top: 0, right: 120, left: 10, bottom: 0 }} barSize={16}>
         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" />
         <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
@@ -466,8 +468,7 @@ function MigrationTable({ data }) {
 }
 
 // ── Kazakhstan Leaflet Map ─────────────────────────────────────────────────────
-const GEO_URL_PRIMARY  = 'https://cdn.jsdelivr.net/gh/wmgeolab/geoBoundaries@5.0.0/releaseData/gbOpen/KAZ/ADM1/geoBoundaries-KAZ-ADM1.geojson'
-const GEO_URL_FALLBACK = '/kz-regions.geojson'
+const GEO_URL = '/kz-regions.geojson'
 
 // canonical forms used as byNorm keys (GeoJSON name → canonical)
 const EN_NORM = {
@@ -515,15 +516,10 @@ function KazakhstanMap({ regions, activeKeys, onToggle }) {
   const [loadErr, setLoadErr] = useState(false)
 
   useEffect(() => {
-    fetch(GEO_URL_PRIMARY)
+    fetch(GEO_URL)
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(setGeoData)
-      .catch(() =>
-        fetch(GEO_URL_FALLBACK)
-          .then(r => { if (!r.ok) throw new Error(); return r.json() })
-          .then(setGeoData)
-          .catch(() => setLoadErr(true))
-      )
+      .catch(() => setLoadErr(true))
   }, [])
 
   const norm = (s = '') => {
