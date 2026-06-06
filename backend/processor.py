@@ -3,11 +3,47 @@ import pandas as pd
 from collections import defaultdict
 from datetime import datetime
 from sqlalchemy.orm import Session
+from openpyxl import load_workbook as _load_workbook
 from models import (
     KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
     AgeDistribution, Categorization, GenderStats, OkvedStats,
     NationalityStats, UploadSession, MicroAgg, OkvedAgg, NatAgg, NkzAgg, EduAgg, MigrationStats,
 )
+
+
+_CHUNK_SIZE = 30_000  # rows per chunk — keeps peak RAM under ~150 MB per chunk
+
+
+def _iter_sheet_chunks(file_path: str):
+    """Stream XLSX in read-only mode, yielding (sheet_name, df_chunk) up to _CHUNK_SIZE rows."""
+    try:
+        wb = _load_workbook(file_path, read_only=True, data_only=True)
+    except Exception:
+        return
+    try:
+        for ws in wb.worksheets:
+            try:
+                headers = None
+                n_cols = 0
+                rows: list = []
+                for row in ws.iter_rows(values_only=True):
+                    if headers is None:
+                        headers = [str(c).strip() if c is not None else '' for c in row]
+                        n_cols = len(headers)
+                        continue
+                    # Pad short rows so all rows have the same width
+                    if len(row) < n_cols:
+                        row = row + (None,) * (n_cols - len(row))
+                    rows.append(row[:n_cols])
+                    if len(rows) >= _CHUNK_SIZE:
+                        yield ws.title, pd.DataFrame(rows, columns=headers)
+                        rows = []
+                if rows and headers is not None:
+                    yield ws.title, pd.DataFrame(rows, columns=headers)
+            except Exception:
+                continue
+    finally:
+        wb.close()
 
 
 def _update(db: Session, session_id: int, progress: int, current_file: str = ""):
@@ -102,17 +138,7 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         file_name = os.path.basename(file_path)
         _update(db, session_id, int(file_idx / total_files * 85), file_name)
 
-        try:
-            xl = pd.ExcelFile(file_path)
-        except Exception:
-            continue
-
-        for sheet_name in xl.sheet_names:
-            try:
-                df = pd.read_excel(xl, sheet_name=sheet_name)
-            except Exception:
-                continue
-
+        for sheet_name, df in _iter_sheet_chunks(file_path):
             df.columns = [c.strip() if isinstance(c, str) else str(c) for c in df.columns]
             total_persons += len(df)
 
@@ -363,6 +389,8 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             if edu_parts:
                 _edu_df = pd.concat(edu_parts, ignore_index=True)
                 edu_chunks.append(_edu_df.groupby(_EDU_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
+
+            del df, rec_df  # free each chunk immediately before the next
 
         # ── Insert this file's agg rows immediately; free RAM before next file ─
         def _insert_agg(chunks, dim_cols, agg_spec, Model):
