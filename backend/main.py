@@ -957,6 +957,13 @@ FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
+    @app.get("/kz-regions.geojson", include_in_schema=False)
+    def serve_geojson():
+        geo = os.path.join(FRONTEND_DIST, "kz-regions.geojson")
+        if os.path.isfile(geo):
+            return FileResponse(geo, media_type="application/geo+json")
+        raise HTTPException(status_code=404, detail="GeoJSON not found")
+
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_frontend(full_path: str):
         index = os.path.join(FRONTEND_DIST, "index.html")
