@@ -468,7 +468,7 @@ function MigrationTable({ data }) {
 }
 
 // ── Kazakhstan Leaflet Map ─────────────────────────────────────────────────────
-const GEO_URL = '/kz-regions.geojson'
+const GEO_URL = '/kz-regions.geojson?v=2'
 
 // canonical forms used as byNorm keys (GeoJSON name → canonical)
 const EN_NORM = {

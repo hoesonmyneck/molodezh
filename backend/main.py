@@ -961,7 +961,8 @@ if os.path.isdir(FRONTEND_DIST):
     def serve_geojson():
         geo = os.path.join(FRONTEND_DIST, "kz-regions.geojson")
         if os.path.isfile(geo):
-            return FileResponse(geo, media_type="application/geo+json")
+            return FileResponse(geo, media_type="application/geo+json",
+                                headers={"Cache-Control": "no-store"})
         raise HTTPException(status_code=404, detail="GeoJSON not found")
 
     @app.get("/{full_path:path}", include_in_schema=False)
