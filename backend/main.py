@@ -19,7 +19,7 @@ _emergency_cleanup()
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
@@ -216,10 +216,32 @@ def delete_user(user_id: int, db: Session = Depends(get_db), _: User = Depends(r
 # ── Upload routes ─────────────────────────────────────────────────────────────
 @app.post("/api/upload")
 async def upload_files(
+    request: Request,
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ):
+    # Reject early if the upload would exceed available disk space
+    try:
+        content_length = int(request.headers.get("content-length", 0))
+        _stat = os.statvfs(DATA_DIR)
+        free_bytes = _stat.f_bavail * _stat.f_bsize
+        # Keep at least 200 MB free after upload
+        if content_length > 0 and free_bytes - content_length < 200 * 1024 * 1024:
+            raise HTTPException(
+                status_code=507,
+                detail=(
+                    f"Недостаточно места на диске. "
+                    f"Нужно ≥{content_length // 1024 // 1024 + 200} МБ, "
+                    f"свободно {free_bytes // 1024 // 1024} МБ. "
+                    "Нажмите «Очистить диск» или загрузите меньше файлов за раз."
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # statvfs unavailable (Windows dev) — skip check
+
     session = UploadSession(files_count=len(files), status="pending", progress=0)
     db.add(session)
     db.commit()

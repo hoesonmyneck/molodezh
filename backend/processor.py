@@ -412,6 +412,12 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         _insert_agg(nkz_chunks,   _NKZ_DIM_COLS,   _ST_AGG_SPEC, NkzAgg)
         _insert_agg(edu_chunks,   _EDU_DIM_COLS,   _ST_AGG_SPEC, EduAgg)
 
+        # Free disk immediately after this file is fully processed
+        try:
+            os.unlink(file_path)
+        except OSError:
+            pass
+
     # ── Global derived stats ───────────────────────────────────────────────────
     age_total = sum(age_histogram.values())
     avg_age = sum(k * v for k, v in age_histogram.items()) / age_total if age_total > 0 else 0
