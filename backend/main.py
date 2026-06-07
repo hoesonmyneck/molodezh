@@ -445,16 +445,18 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     deleted_count = sq.count()
     sq.delete(synchronize_session=False)
     db.commit()
+    db.close()      # return connection to pool before VACUUM
+    engine.dispose()  # close all pooled connections so SQLite is not locked
 
-    # VACUUM: compacts DB file so SQLite actually releases disk pages
+    # VACUUM requires no open transactions — use a direct sqlite3 connection
+    import sqlite3 as _sq3
     try:
-        raw = engine.raw_connection()
+        _c = _sq3.connect(DB_PATH, timeout=60)
         try:
-            raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            raw.execute("VACUUM")
-            raw.commit()
+            _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _c.execute("VACUUM")
         finally:
-            raw.close()
+            _c.close()
     except Exception as exc:
         return {"error": f"Удалено {deleted_count} сессий, но VACUUM не удался: {exc}"}
 
