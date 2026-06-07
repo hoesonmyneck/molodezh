@@ -18,7 +18,7 @@ def _emergency_cleanup():
     # Must run before SQLAlchemy initialises so all pool connections see WAL from the start.
     try:
         import sqlite3 as _sq3
-        _db_path = "/data/data.db"
+        _db_path = "/data/molodezh.db"
         if os.path.isfile(_db_path):
             _c = _sq3.connect(_db_path, timeout=10, isolation_level=None)
             _c.execute("PRAGMA journal_mode=WAL")
