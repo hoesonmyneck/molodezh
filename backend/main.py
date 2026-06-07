@@ -430,15 +430,15 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     engine.dispose()
 
     tables = [
-        "kpi_stats", "status_breakdown", "region_breakdown", "district_breakdown",
-        "age_distribution", "categorization", "gender_stats", "okved_stats",
-        "nationality_stats", "micro_agg", "okved_agg", "nat_agg", "nkz_agg", "edu_agg",
-        "migration_stats",
+        "cross_stats", "kpi_stats", "status_breakdown", "region_breakdown",
+        "district_breakdown", "age_distribution", "categorization", "gender_stats",
+        "okved_stats", "nationality_stats", "micro_agg", "okved_agg", "nat_agg",
+        "nkz_agg", "edu_agg", "migration_stats",
     ]
     deleted_count = 0
-    vacuum_note = "OK"
+    vacuum_note = "skipped"
+    import sqlite3 as _sq3
     try:
-        import sqlite3 as _sq3
         with _sq3.connect(DB_PATH, timeout=60) as _c:
             if active_id:
                 deleted_count = _c.execute(
@@ -454,11 +454,21 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
                 for t in tables:
                     _c.execute(f"DELETE FROM {t}")
                 _c.execute("DELETE FROM upload_sessions")
-            _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            _c.execute("VACUUM")
     except Exception as exc:
         raise HTTPException(status_code=500,
-                            detail=f"Ошибка: {type(exc).__name__}: {exc}")
+                            detail=f"Ошибка удаления: {type(exc).__name__}: {exc}")
+
+    # VACUUM needs exclusive access — skip if another connection holds the DB
+    try:
+        _cv = _sq3.connect(DB_PATH, timeout=10, isolation_level=None)
+        try:
+            _cv.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _cv.execute("VACUUM")
+            vacuum_note = "OK"
+        finally:
+            _cv.close()
+    except Exception as exc:
+        vacuum_note = f"пропущен: {type(exc).__name__}: {exc}"
 
     db_size_after = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
     freed_mb = round((db_size_before - db_size_after) / 1024 / 1024, 1)
