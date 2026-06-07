@@ -438,8 +438,13 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     deleted_count = 0
     vacuum_note = "skipped"
     import sqlite3 as _sq3
+
+    # Use MEMORY journal so DELETEs don't try to write a WAL/journal file.
+    # When disk is full, WAL writes fail; MEMORY mode overwrites existing DB blocks only.
     try:
-        with _sq3.connect(DB_PATH, timeout=60) as _c:
+        _c = _sq3.connect(DB_PATH, timeout=60, isolation_level=None)  # autocommit
+        try:
+            _c.execute("PRAGMA journal_mode=MEMORY")
             if active_id:
                 deleted_count = _c.execute(
                     "SELECT COUNT(*) FROM upload_sessions WHERE id != ?", (active_id,)
@@ -454,21 +459,31 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
                 for t in tables:
                     _c.execute(f"DELETE FROM {t}")
                 _c.execute("DELETE FROM upload_sessions")
+        finally:
+            _c.close()
     except Exception as exc:
         raise HTTPException(status_code=500,
                             detail=f"Ошибка удаления: {type(exc).__name__}: {exc}")
 
-    # VACUUM needs exclusive access — skip if another connection holds the DB
+    # VACUUM compacts the DB file — needs free space ≈ size of new compacted DB.
+    # Non-fatal: deletions above already freed logical space for SQLite to reuse.
     try:
         _cv = _sq3.connect(DB_PATH, timeout=10, isolation_level=None)
         try:
-            _cv.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             _cv.execute("VACUUM")
+            _cv.execute("PRAGMA journal_mode=WAL")
             vacuum_note = "OK"
         finally:
             _cv.close()
     except Exception as exc:
-        vacuum_note = f"пропущен: {type(exc).__name__}: {exc}"
+        # Restore WAL mode even if VACUUM failed
+        try:
+            _cw = _sq3.connect(DB_PATH, timeout=5, isolation_level=None)
+            _cw.execute("PRAGMA journal_mode=WAL")
+            _cw.close()
+        except Exception:
+            pass
+        vacuum_note = f"пропущен ({type(exc).__name__})"
 
     db_size_after = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
     freed_mb = round((db_size_before - db_size_after) / 1024 / 1024, 1)
