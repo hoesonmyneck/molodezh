@@ -433,6 +433,14 @@ def disk_stats(_: User = Depends(require_admin)):
 @app.post("/api/admin/cleanup-db")
 def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Delete all non-active session rows and VACUUM the SQLite DB to reclaim disk space."""
+    # Refuse if a session is currently being processed — its DB connection would lock us out.
+    processing = db.query(UploadSession).filter(UploadSession.status == "processing").first()
+    if processing:
+        raise HTTPException(
+            status_code=409,
+            detail="Обработка файлов в процессе. Дождитесь завершения перед очисткой БД.",
+        )
+
     active_id = get_active_session_id(db)
     db_size_before = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
 
@@ -454,7 +462,7 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     # SQLite WAL autocheckpoints every ~1000 pages (~4 MB), so the WAL file stays
     # tiny even when deleting gigabytes of rows — no risk of filling the disk.
     try:
-        _c = _sq3.connect(DB_PATH, timeout=60, isolation_level=None)
+        _c = _sq3.connect(DB_PATH, timeout=25, isolation_level=None)
         try:
             if active_id:
                 deleted_count = _c.execute(
