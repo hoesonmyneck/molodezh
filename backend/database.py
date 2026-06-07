@@ -7,7 +7,8 @@ DATA_DIR = "/data" if os.path.isdir("/data") else os.path.dirname(__file__)
 DB_PATH = os.path.join(DATA_DIR, "molodezh.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+from sqlalchemy.pool import NullPool
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, poolclass=NullPool)
 
 from sqlalchemy import event as _event
 
