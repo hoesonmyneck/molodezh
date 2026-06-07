@@ -423,42 +423,45 @@ def disk_stats(_: User = Depends(require_admin)):
 def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Delete all non-active session rows and VACUUM the SQLite DB to reclaim disk space."""
     active_id = get_active_session_id(db)
-
     db_size_before = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
+    deleted_count = 0
 
-    # Delete aggregate data for every non-active session
+    # Delete aggregate data per model, committing after each to avoid one huge transaction
     agg_models = [
         KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
         AgeDistribution, Categorization, GenderStats, OkvedStats,
         NationalityStats, MicroAgg, OkvedAgg, NatAgg, NkzAgg, EduAgg, MigrationStats,
     ]
-    for model in agg_models:
-        q = db.query(model)
-        if active_id:
-            q = q.filter(model.session_id != active_id)
-        q.delete(synchronize_session=False)
-
-    # Remove the UploadSession records themselves (keep active one)
-    sq = db.query(UploadSession)
-    if active_id:
-        sq = sq.filter(UploadSession.id != active_id)
-    deleted_count = sq.count()
-    sq.delete(synchronize_session=False)
-    db.commit()
-    db.close()      # return connection to pool before VACUUM
-    engine.dispose()  # close all pooled connections so SQLite is not locked
-
-    # VACUUM requires no open transactions — use a direct sqlite3 connection
-    import sqlite3 as _sq3
     try:
-        _c = _sq3.connect(DB_PATH, timeout=60)
-        try:
+        for model in agg_models:
+            q = db.query(model)
+            if active_id:
+                q = q.filter(model.session_id != active_id)
+            q.delete(synchronize_session=False)
+            db.commit()
+
+        sq = db.query(UploadSession)
+        if active_id:
+            sq = sq.filter(UploadSession.id != active_id)
+        deleted_count = sq.count()
+        sq.delete(synchronize_session=False)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500,
+                            detail=f"Ошибка удаления данных: {type(exc).__name__}: {exc}")
+
+    # VACUUM: close all SQLAlchemy connections first (VACUUM needs exclusive access)
+    vacuum_note = "OK"
+    try:
+        db.close()
+        engine.dispose()
+        import sqlite3 as _sq3
+        with _sq3.connect(DB_PATH, timeout=30) as _c:
             _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             _c.execute("VACUUM")
-        finally:
-            _c.close()
     except Exception as exc:
-        return {"error": f"Удалено {deleted_count} сессий, но VACUUM не удался: {exc}"}
+        vacuum_note = f"VACUUM не удался: {type(exc).__name__}: {exc}"
 
     db_size_after = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
     freed_mb = round((db_size_before - db_size_after) / 1024 / 1024, 1)
@@ -467,6 +470,7 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
         "freed_mb": freed_mb,
         "db_mb_before": round(db_size_before / 1024 / 1024, 1),
         "db_mb_after":  round(db_size_after  / 1024 / 1024, 1),
+        "vacuum": vacuum_note,
     }
 
 

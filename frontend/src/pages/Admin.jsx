@@ -152,7 +152,6 @@ function UserSection() {
 function UploadSection() {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
-  const [sessionId, setSessionId] = useState(null)
   const [progress, setProgress] = useState(null)
   const [sessions, setSessions] = useState([])
   const fileRef = useRef()
@@ -194,7 +193,6 @@ function UploadSection() {
   const handleReprocess = async (sid) => {
     if (!confirm(`Перезапустить обработку сессии #${sid}? Текущие данные этой сессии будут удалены и пересчитаны.`)) return
     setUploading(true)
-    setSessionId(sid)
     setProgress({ status: 'processing', progress: 0, current_file: 'Перезапуск обработки...' })
     try {
       await reprocessSession(sid)
@@ -225,7 +223,6 @@ function UploadSection() {
 
     try {
       const { data } = await uploadFiles(fd)
-      setSessionId(data.session_id)
       setProgress({ status: 'processing', progress: 0, current_file: 'Начало обработки...' })
       poll(data.session_id)
     } catch (ex) {
@@ -402,8 +399,8 @@ function DiskSection() {
     setBusy(true); setMsg('')
     try {
       const { data } = await cleanupDb()
-      if (data.error) { setMsg(data.error) }
-      else setMsg(`Удалено ${data.deleted_sessions} сессий, освобождено ~${data.freed_mb} МБ (БД: ${data.db_mb_before} → ${data.db_mb_after} МБ)`)
+      const vac = data.vacuum && data.vacuum !== 'OK' ? ` (${data.vacuum})` : ''
+      setMsg(`Удалено ${data.deleted_sessions} сессий, освобождено ~${data.freed_mb} МБ (БД: ${data.db_mb_before} → ${data.db_mb_after} МБ)${vac}`)
       load()
     } catch (ex) { setMsg(ex.response?.data?.detail || 'Ошибка') }
     finally { setBusy(false) }
