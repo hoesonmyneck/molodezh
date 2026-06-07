@@ -399,11 +399,30 @@ function DiskSection() {
     setBusy(true); setMsg('')
     try {
       const { data } = await cleanupDb()
-      const vac = data.vacuum && data.vacuum !== 'OK' ? ` (${data.vacuum})` : ''
-      setMsg(`Удалено ${data.deleted_sessions} сессий, освобождено ~${data.freed_mb} МБ (БД: ${data.db_mb_before} → ${data.db_mb_after} МБ)${vac}`)
-      load()
-    } catch (ex) { setMsg(ex.response?.data?.detail || 'Ошибка') }
-    finally { setBusy(false) }
+      if (data.vacuum && data.vacuum.includes('фоне')) {
+        setMsg(`Запущено: удалено ${data.deleted_sessions} сессий. VACUUM выполняется в фоне (~2-5 мин). Обновите статистику диска через несколько минут.`)
+        // Poll disk stats until DB size stabilises
+        let prev = stats?.db_mb ?? 0
+        const iv = setInterval(async () => {
+          try {
+            const { data: s } = await getDiskStats()
+            setStats(s)
+            if (s.db_mb != null && Math.abs(s.db_mb - prev) < 1) { clearInterval(iv); setBusy(false) }
+            prev = s.db_mb ?? prev
+          } catch { clearInterval(iv); setBusy(false) }
+        }, 10000)
+      } else {
+        const vac = data.vacuum && data.vacuum !== 'OK' ? ` (${data.vacuum})` : ''
+        const freed = data.freed_mb != null ? `~${data.freed_mb} МБ` : '—'
+        const after = data.db_mb_after != null ? data.db_mb_after : '—'
+        setMsg(`Удалено ${data.deleted_sessions} сессий, освобождено ${freed} (БД: ${data.db_mb_before} → ${after} МБ)${vac}`)
+        load()
+        setBusy(false)
+      }
+    } catch (ex) {
+      setMsg(ex.response?.data?.detail || 'Ошибка')
+      setBusy(false)
+    }
   }
 
   const usedPct = stats ? Math.round(stats.used_mb / stats.total_mb * 100) : 0

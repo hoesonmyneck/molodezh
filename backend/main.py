@@ -96,6 +96,9 @@ app = FastAPI(title="Молодежь РК")
 _filter_cache: dict = {}
 _filter_cache_lock = threading.Lock()
 
+# ── DB cleanup global lock — prevents concurrent cleanup_db runs ──────────────
+_cleanup_lock = threading.Lock()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -433,20 +436,28 @@ def disk_stats(_: User = Depends(require_admin)):
 @app.post("/api/admin/cleanup-db")
 def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     """Delete all non-active session rows and VACUUM the SQLite DB to reclaim disk space."""
-    # Refuse if a session is currently being processed — its DB connection would lock us out.
-    processing = db.query(UploadSession).filter(UploadSession.status == "processing").first()
-    if processing:
-        raise HTTPException(
-            status_code=409,
-            detail="Обработка файлов в процессе. Дождитесь завершения перед очисткой БД.",
-        )
+    # One cleanup at a time — a previous call may still be running VACUUM in the background.
+    if not _cleanup_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Очистка БД уже выполняется, подождите.")
 
-    active_id = get_active_session_id(db)
-    db_size_before = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
+    try:
+        processing = db.query(UploadSession).filter(UploadSession.status == "processing").first()
+        if processing:
+            raise HTTPException(
+                status_code=409,
+                detail="Обработка файлов в процессе. Дождитесь завершения.",
+            )
 
-    # Release ALL SQLAlchemy connections before any write so SQLite doesn't see a locked DB
-    db.close()
-    engine.dispose()
+        active_id = get_active_session_id(db)
+        db_size_before = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
+        db.close()
+        engine.dispose()
+    except HTTPException:
+        _cleanup_lock.release()
+        raise
+    except Exception as exc:
+        _cleanup_lock.release()
+        raise HTTPException(status_code=500, detail=str(exc))
 
     tables = [
         "cross_stats", "kpi_stats", "status_breakdown", "region_breakdown",
@@ -454,56 +465,50 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
         "okved_stats", "nationality_stats", "micro_agg", "okved_agg", "nat_agg",
         "nkz_agg", "edu_agg", "migration_stats",
     ]
-    deleted_count = 0
-    vacuum_note = "skipped"
     import sqlite3 as _sq3
 
-    # isolation_level=None = autocommit: each DELETE commits immediately.
-    # SQLite WAL autocheckpoints every ~1000 pages (~4 MB), so the WAL file stays
-    # tiny even when deleting gigabytes of rows — no risk of filling the disk.
+    # Count rows to delete upfront (quick SELECT before background thread starts)
     try:
-        _c = _sq3.connect(DB_PATH, timeout=25, isolation_level=None)
-        try:
-            if active_id:
-                deleted_count = _c.execute(
-                    "SELECT COUNT(*) FROM upload_sessions WHERE id != ?", (active_id,)
-                ).fetchone()[0]
-                for t in tables:
-                    _c.execute(f"DELETE FROM {t} WHERE session_id != ?", (active_id,))
-                _c.execute("DELETE FROM upload_sessions WHERE id != ?", (active_id,))
-            else:
-                deleted_count = _c.execute(
-                    "SELECT COUNT(*) FROM upload_sessions"
-                ).fetchone()[0]
-                for t in tables:
-                    _c.execute(f"DELETE FROM {t}")
-                _c.execute("DELETE FROM upload_sessions")
-        finally:
-            _c.close()
-    except Exception as exc:
-        raise HTTPException(status_code=500,
-                            detail=f"Ошибка удаления: {type(exc).__name__}: {exc}")
+        _c0 = _sq3.connect(DB_PATH, timeout=10, isolation_level=None)
+        if active_id:
+            deleted_count = _c0.execute(
+                "SELECT COUNT(*) FROM upload_sessions WHERE id != ?", (active_id,)
+            ).fetchone()[0]
+        else:
+            deleted_count = _c0.execute("SELECT COUNT(*) FROM upload_sessions").fetchone()[0]
+        _c0.close()
+    except Exception:
+        deleted_count = -1
 
-    # VACUUM compacts the DB file — needs free disk space ≈ size of compacted DB.
-    # Non-fatal: if it fails the rows are still gone and SQLite reuses the freed pages.
-    try:
-        _cv = _sq3.connect(DB_PATH, timeout=30, isolation_level=None)
+    # Run DELETEs + VACUUM in a background thread — VACUUM on a large DB can take
+    # several minutes, far exceeding the HTTP proxy timeout.
+    # _cleanup_lock is released by the background thread when it finishes.
+    def _run():
         try:
-            _cv.execute("VACUUM")
-            vacuum_note = "OK"
+            _c = _sq3.connect(DB_PATH, timeout=300, isolation_level=None)
+            try:
+                if active_id:
+                    for t in tables:
+                        _c.execute(f"DELETE FROM {t} WHERE session_id != ?", (active_id,))
+                    _c.execute("DELETE FROM upload_sessions WHERE id != ?", (active_id,))
+                else:
+                    for t in tables:
+                        _c.execute(f"DELETE FROM {t}")
+                    _c.execute("DELETE FROM upload_sessions")
+                _c.execute("VACUUM")
+            finally:
+                _c.close()
         finally:
-            _cv.close()
-    except Exception as exc:
-        vacuum_note = f"пропущен ({type(exc).__name__}: {exc})"
+            _cleanup_lock.release()
 
-    db_size_after = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
-    freed_mb = round((db_size_before - db_size_after) / 1024 / 1024, 1)
+    threading.Thread(target=_run, daemon=True).start()
+
     return {
         "deleted_sessions": deleted_count,
-        "freed_mb": freed_mb,
+        "freed_mb": None,
         "db_mb_before": round(db_size_before / 1024 / 1024, 1),
-        "db_mb_after":  round(db_size_after  / 1024 / 1024, 1),
-        "vacuum": vacuum_note,
+        "db_mb_after": None,
+        "vacuum": "выполняется в фоне (~2-5 мин), проверьте диск позже",
     }
 
 
