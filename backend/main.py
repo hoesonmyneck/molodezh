@@ -29,7 +29,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import Base, engine, get_db
+from database import Base, DB_PATH, engine, get_db
 from models import (
     AgeDistribution, Categorization, DistrictBreakdown, EduAgg,
     GenderStats, KpiStats, MicroAgg, MigrationStats, NatAgg, NationalityStats, NkzAgg, OkvedAgg, OkvedStats,
@@ -397,6 +397,75 @@ def cleanup_uploads(_: User = Depends(require_admin)):
                 except Exception:
                     pass
     return {"deleted_sessions": deleted, "freed_mb": round(freed_mb, 1)}
+
+
+@app.get("/api/admin/disk-stats")
+def disk_stats(_: User = Depends(require_admin)):
+    result: dict = {}
+    try:
+        st = os.statvfs(DATA_DIR)
+        total = st.f_blocks * st.f_bsize
+        free  = st.f_bavail * st.f_bsize
+        result["total_mb"] = round(total / 1024 / 1024)
+        result["used_mb"]  = round((total - free) / 1024 / 1024)
+        result["free_mb"]  = round(free  / 1024 / 1024)
+    except Exception:
+        pass
+    try:
+        if os.path.isfile(DB_PATH):
+            result["db_mb"] = round(os.path.getsize(DB_PATH) / 1024 / 1024, 1)
+    except Exception:
+        pass
+    return result
+
+
+@app.post("/api/admin/cleanup-db")
+def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """Delete all non-active session rows and VACUUM the SQLite DB to reclaim disk space."""
+    active_id = get_active_session_id(db)
+
+    db_size_before = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
+
+    # Delete aggregate data for every non-active session
+    agg_models = [
+        KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
+        AgeDistribution, Categorization, GenderStats, OkvedStats,
+        NationalityStats, MicroAgg, OkvedAgg, NatAgg, NkzAgg, EduAgg, MigrationStats,
+    ]
+    for model in agg_models:
+        q = db.query(model)
+        if active_id:
+            q = q.filter(model.session_id != active_id)
+        q.delete(synchronize_session=False)
+
+    # Remove the UploadSession records themselves (keep active one)
+    sq = db.query(UploadSession)
+    if active_id:
+        sq = sq.filter(UploadSession.id != active_id)
+    deleted_count = sq.count()
+    sq.delete(synchronize_session=False)
+    db.commit()
+
+    # VACUUM: compacts DB file so SQLite actually releases disk pages
+    try:
+        raw = engine.raw_connection()
+        try:
+            raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            raw.execute("VACUUM")
+            raw.commit()
+        finally:
+            raw.close()
+    except Exception as exc:
+        return {"error": f"Удалено {deleted_count} сессий, но VACUUM не удался: {exc}"}
+
+    db_size_after = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
+    freed_mb = round((db_size_before - db_size_after) / 1024 / 1024, 1)
+    return {
+        "deleted_sessions": deleted_count,
+        "freed_mb": freed_mb,
+        "db_mb_before": round(db_size_before / 1024 / 1024, 1),
+        "db_mb_after":  round(db_size_after  / 1024 / 1024, 1),
+    }
 
 
 @app.get("/api/upload/sessions")

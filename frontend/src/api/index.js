@@ -37,6 +37,8 @@ export const getSessions = () => api.get('/upload/sessions')
 export const reprocessSession = (sessionId) => api.post(`/admin/reprocess/${sessionId}`)
 export const resetSession = (sessionId) => api.post(`/admin/reset-session/${sessionId}`)
 export const cleanupUploads = () => api.post('/admin/cleanup-uploads')
+export const getDiskStats   = () => api.get('/admin/disk-stats')
+export const cleanupDb      = () => api.post('/admin/cleanup-db')
 
 export const getKpis = () => api.get('/data/kpis')
 export const getStatuses = () => api.get('/data/statuses')

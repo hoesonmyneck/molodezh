@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   createUser, listUsers, deleteUser,
-  uploadFiles, getProgress, getSessions, reprocessSession, resetSession, cleanupUploads,
+  uploadFiles, getProgress, getSessions, reprocessSession, resetSession,
+  cleanupUploads, getDiskStats, cleanupDb,
 } from '../api'
 
 function Card({ children, style }) {
@@ -373,6 +374,83 @@ function UploadSection() {
   )
 }
 
+// ── Disk management ──────────────────────────────────────────────────────────
+function DiskSection() {
+  const [stats, setStats] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  const load = async () => {
+    try { const { data } = await getDiskStats(); setStats(data) } catch {}
+  }
+
+  useEffect(() => { load() }, [])
+
+  const handleCleanupUploads = async () => {
+    if (!confirm('Удалить все загруженные Excel-файлы с диска? Обработанные данные в БД останутся.')) return
+    setBusy(true); setMsg('')
+    try {
+      const { data } = await cleanupUploads()
+      setMsg(`Файлы очищены, освобождено ~${data.freed_mb} МБ`)
+      load()
+    } catch (ex) { setMsg(ex.response?.data?.detail || 'Ошибка') }
+    finally { setBusy(false) }
+  }
+
+  const handleCleanupDb = async () => {
+    if (!confirm('Удалить все старые сессии из БД (будет оставлена только активная) и сжать базу данных? Это освободит значительное место на диске.')) return
+    setBusy(true); setMsg('')
+    try {
+      const { data } = await cleanupDb()
+      if (data.error) { setMsg(data.error) }
+      else setMsg(`Удалено ${data.deleted_sessions} сессий, освобождено ~${data.freed_mb} МБ (БД: ${data.db_mb_before} → ${data.db_mb_after} МБ)`)
+      load()
+    } catch (ex) { setMsg(ex.response?.data?.detail || 'Ошибка') }
+    finally { setBusy(false) }
+  }
+
+  const usedPct = stats ? Math.round(stats.used_mb / stats.total_mb * 100) : 0
+  const barColor = usedPct > 85 ? '#ef4444' : usedPct > 65 ? '#f59e0b' : '#22c55e'
+
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <SectionTitle>Диск и база данных</SectionTitle>
+
+      {stats && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--muted)', marginBottom: 4 }}>
+            <span>Занято {stats.used_mb} МБ из {stats.total_mb} МБ</span>
+            <span style={{ color: usedPct > 85 ? '#ef4444' : 'var(--muted)' }}>Свободно {stats.free_mb} МБ ({100 - usedPct}%)</span>
+          </div>
+          <div style={{ background: '#f3f4f6', borderRadius: 4, height: 8, overflow: 'hidden' }}>
+            <div style={{ background: barColor, height: '100%', width: `${usedPct}%`, transition: 'width .4s' }} />
+          </div>
+          {stats.db_mb != null && (
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+              БД: {stats.db_mb} МБ
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <Btn variant="outline" disabled={busy} onClick={handleCleanupUploads} style={{ fontSize: 12 }}>
+          Очистить Excel-файлы
+        </Btn>
+        <Btn variant="danger" disabled={busy} onClick={handleCleanupDb} style={{ fontSize: 12 }}>
+          Очистить БД (старые сессии)
+        </Btn>
+      </div>
+
+      {msg && (
+        <div style={{ marginTop: 10, fontSize: 12, color: msg.startsWith('Ошибка') || msg.includes('не удался') ? '#ef4444' : '#22c55e' }}>
+          {msg}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 const inp = {
   padding: '8px 12px', border: '1px solid var(--border)',
   borderRadius: 7, fontSize: 13, width: 180,
@@ -386,6 +464,7 @@ export default function Admin() {
       
       <UserSection />
       <UploadSection />
+      <DiskSection />
     </div>
   )
 }
