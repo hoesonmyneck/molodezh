@@ -14,6 +14,17 @@ def _emergency_cleanup():
                 os.makedirs(upload_dir, exist_ok=True)
     except Exception:
         pass
+    # Restore WAL journal mode in case a prior operation switched it to MEMORY/OFF.
+    # Must run before SQLAlchemy initialises so all pool connections see WAL from the start.
+    try:
+        import sqlite3 as _sq3
+        _db_path = "/data/data.db"
+        if os.path.isfile(_db_path):
+            _c = _sq3.connect(_db_path, timeout=10, isolation_level=None)
+            _c.execute("PRAGMA journal_mode=WAL")
+            _c.close()
+    except Exception:
+        pass
 
 _emergency_cleanup()
 from datetime import datetime, timedelta
@@ -439,12 +450,12 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     vacuum_note = "skipped"
     import sqlite3 as _sq3
 
-    # Use MEMORY journal so DELETEs don't try to write a WAL/journal file.
-    # When disk is full, WAL writes fail; MEMORY mode overwrites existing DB blocks only.
+    # isolation_level=None = autocommit: each DELETE commits immediately.
+    # SQLite WAL autocheckpoints every ~1000 pages (~4 MB), so the WAL file stays
+    # tiny even when deleting gigabytes of rows — no risk of filling the disk.
     try:
-        _c = _sq3.connect(DB_PATH, timeout=60, isolation_level=None)  # autocommit
+        _c = _sq3.connect(DB_PATH, timeout=60, isolation_level=None)
         try:
-            _c.execute("PRAGMA journal_mode=MEMORY")
             if active_id:
                 deleted_count = _c.execute(
                     "SELECT COUNT(*) FROM upload_sessions WHERE id != ?", (active_id,)
@@ -465,25 +476,17 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
         raise HTTPException(status_code=500,
                             detail=f"Ошибка удаления: {type(exc).__name__}: {exc}")
 
-    # VACUUM compacts the DB file — needs free space ≈ size of new compacted DB.
-    # Non-fatal: deletions above already freed logical space for SQLite to reuse.
+    # VACUUM compacts the DB file — needs free disk space ≈ size of compacted DB.
+    # Non-fatal: if it fails the rows are still gone and SQLite reuses the freed pages.
     try:
-        _cv = _sq3.connect(DB_PATH, timeout=10, isolation_level=None)
+        _cv = _sq3.connect(DB_PATH, timeout=30, isolation_level=None)
         try:
             _cv.execute("VACUUM")
-            _cv.execute("PRAGMA journal_mode=WAL")
             vacuum_note = "OK"
         finally:
             _cv.close()
     except Exception as exc:
-        # Restore WAL mode even if VACUUM failed
-        try:
-            _cw = _sq3.connect(DB_PATH, timeout=5, isolation_level=None)
-            _cw.execute("PRAGMA journal_mode=WAL")
-            _cw.close()
-        except Exception:
-            pass
-        vacuum_note = f"пропущен ({type(exc).__name__})"
+        vacuum_note = f"пропущен ({type(exc).__name__}: {exc})"
 
     db_size_after = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
     freed_mb = round((db_size_before - db_size_after) / 1024 / 1024, 1)
