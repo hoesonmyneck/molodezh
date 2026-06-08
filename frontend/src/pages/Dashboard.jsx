@@ -723,7 +723,8 @@ export default function Dashboard({ globalFilters = [] }) {
           onSubClick={() => toggleFilter('status', 'АКТИВНЫЙ ТД')}
           activeFilter={af.some(f => f.dim === 'status' && f.val === 'АКТИВНЫЙ ТД')} />
         <KpiCard title="Средняя ЗП" main={kpis?.avg_salary} />
-        <KpiCard title="ВУЗ" main={kpis?.students} sub={kpis?.tipo_count} subLabel="ТИПО"
+        <KpiCard title="ВУЗ" main={kpis?.students} />
+        <KpiCard title="ТИПО" main={kpis?.tipo_count}
           onSubClick={() => toggleFilter('status', 'ТИПО')}
           activeFilter={af.some(f => f.dim === 'status' && f.val === 'ТИПО')} />
         <KpiCard

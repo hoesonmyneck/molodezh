@@ -65,14 +65,20 @@ function GlobalFilterBar({ onChange }) {
   const [regions, setRegions] = useState([])
   const [districts, setDistricts] = useState([])
   const [sel, setSel] = useState({ region: '', district: '', gender: '', age: '', status: '' })
+  const [exportModal, setExportModal] = useState(null)   // null | { columns, selected }
+  const [exportLoading, setExportLoading] = useState(false)
 
   useEffect(() => {
-    getRegions().then(r => setRegions(r.data || [])).catch(() => {})
+    getRegions()
+      .then(r => setRegions((r.data || []).slice().sort((a, b) => a.name.localeCompare(b.name, 'ru'))))
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
     if (sel.region) {
-      getDistricts(sel.region).then(r => setDistricts(r.data || [])).catch(() => {})
+      getDistricts(sel.region)
+        .then(r => setDistricts((r.data || []).slice().sort((a, b) => a.district_name.localeCompare(b.district_name, 'ru'))))
+        .catch(() => {})
     } else {
       setDistricts([])
     }
@@ -96,26 +102,46 @@ function GlobalFilterBar({ onChange }) {
 
   const hasAny = Object.values(sel).some(Boolean)
 
-  const handleExport = async () => {
-    const districtCode = sel.district
-    if (!districtCode) return
+  const openExportModal = async () => {
+    if (!sel.district) return
+    setExportLoading(true)
     try {
       const token = localStorage.getItem('token')
-      const res = await fetch(`/api/data/export/district?district=${encodeURIComponent(districtCode)}`, {
+      const res = await fetch(`/api/data/export/district/columns?district=${encodeURIComponent(sel.district)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
-      if (!res.ok) return
+      if (!res.ok) { alert('Данные для экспорта не найдены. Переобработайте файлы.'); return }
+      const { columns } = await res.json()
+      setExportModal({ columns, selected: new Set(columns) })
+    } catch { alert('Ошибка при получении списка полей') }
+    finally { setExportLoading(false) }
+  }
+
+  const doDownload = async () => {
+    if (!exportModal || !sel.district) return
+    const cols = [...exportModal.selected].join(',')
+    try {
+      const token = localStorage.getItem('token')
+      const url = `/api/data/export/district?district=${encodeURIComponent(sel.district)}&columns=${encodeURIComponent(cols)}`
+      const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      if (!res.ok) { alert('Ошибка скачивания'); return }
       const blob = await res.blob()
       const cd = res.headers.get('content-disposition') || ''
       const match = cd.match(/filename\*?=(?:UTF-8'')?(.+)/i)
-      const filename = match ? decodeURIComponent(match[1].replace(/"/g, '')) : `${districtCode}.xlsx`
-      const url = URL.createObjectURL(blob)
+      const filename = match ? decodeURIComponent(match[1].replace(/"/g, '')) : `${sel.district}.xlsx`
       const a = document.createElement('a')
-      a.href = url; a.download = filename
+      a.href = URL.createObjectURL(blob); a.download = filename
       document.body.appendChild(a); a.click()
-      document.body.removeChild(a); URL.revokeObjectURL(url)
-    } catch {}
+      document.body.removeChild(a)
+      setExportModal(null)
+    } catch { alert('Ошибка скачивания') }
   }
+
+  const toggleCol = (col) => setExportModal(prev => {
+    const next = new Set(prev.selected)
+    next.has(col) ? next.delete(col) : next.add(col)
+    return { ...prev, selected: next }
+  })
 
   return (
     <div style={{
@@ -176,14 +202,15 @@ function GlobalFilterBar({ onChange }) {
 
       {sel.region && sel.district && (
         <button
-          onClick={handleExport}
+          onClick={openExportModal}
+          disabled={exportLoading}
           style={{
             background: TEAL, border: 'none', color: '#fff',
-            fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            padding: '4px 12px', borderRadius: 6,
+            fontSize: 12, fontWeight: 600, cursor: exportLoading ? 'default' : 'pointer',
+            padding: '4px 12px', borderRadius: 6, opacity: exportLoading ? 0.7 : 1,
           }}
         >
-          Скачать Excel
+          {exportLoading ? 'Загрузка…' : 'Скачать Excel'}
         </button>
       )}
 
@@ -197,6 +224,74 @@ function GlobalFilterBar({ onChange }) {
         >
           Сбросить
         </button>
+      )}
+
+      {exportModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+        }}
+          onClick={e => { if (e.target === e.currentTarget) setExportModal(null) }}
+        >
+          <div style={{
+            background: '#fff', borderRadius: 10, padding: 24, width: 480,
+            maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: 16,
+            boxShadow: '0 8px 32px rgba(0,0,0,.18)',
+          }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#111' }}>
+              Выберите поля для экспорта
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => setExportModal(prev => ({ ...prev, selected: new Set(prev.columns) }))}
+                style={{ fontSize: 12, padding: '3px 10px', borderRadius: 5, border: '1px solid #d1d5db', cursor: 'pointer', background: '#f9fafb' }}
+              >
+                Выбрать все
+              </button>
+              <button
+                onClick={() => setExportModal(prev => ({ ...prev, selected: new Set() }))}
+                style={{ fontSize: 12, padding: '3px 10px', borderRadius: 5, border: '1px solid #d1d5db', cursor: 'pointer', background: '#f9fafb' }}
+              >
+                Снять все
+              </button>
+            </div>
+
+            <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {exportModal.columns.map(col => (
+                <label key={col} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, padding: '3px 0' }}>
+                  <input
+                    type="checkbox"
+                    checked={exportModal.selected.has(col)}
+                    onChange={() => toggleCol(col)}
+                    style={{ accentColor: TEAL, width: 15, height: 15 }}
+                  />
+                  {col}
+                </label>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setExportModal(null)}
+                style={{ fontSize: 13, padding: '6px 16px', borderRadius: 6, border: '1px solid #d1d5db', cursor: 'pointer', background: '#fff' }}
+              >
+                Отмена
+              </button>
+              <button
+                onClick={doDownload}
+                disabled={exportModal.selected.size === 0}
+                style={{
+                  fontSize: 13, fontWeight: 600, padding: '6px 16px', borderRadius: 6,
+                  border: 'none', cursor: exportModal.selected.size === 0 ? 'default' : 'pointer',
+                  background: exportModal.selected.size === 0 ? '#9ca3af' : TEAL, color: '#fff',
+                }}
+              >
+                Скачать ({exportModal.selected.size})
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

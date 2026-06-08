@@ -1207,10 +1207,34 @@ def get_nationality(db: Session = Depends(get_db), _: User = Depends(get_current
     return result
 
 
+# ── District export: column list ──────────────────────────────────────────────
+@app.get("/api/data/export/district/columns")
+def export_district_columns(
+    district: str = Query(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    import glob as _glob
+    sid = get_active_session_id(db)
+    if not sid:
+        raise HTTPException(404, "No active session")
+    _pq_dir   = os.path.join(DATA_DIR, "district_data", str(sid), district)
+    _pq_files = sorted(_glob.glob(os.path.join(_pq_dir, "*.parquet")))
+    if not _pq_files:
+        raise HTTPException(404, "Export data not available. Reprocess files first.")
+    try:
+        import pyarrow.parquet as _pq2
+        schema = _pq2.read_schema(_pq_files[0])
+        return {"columns": schema.names}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 # ── District Excel export ─────────────────────────────────────────────────────
 @app.get("/api/data/export/district")
 def export_district(
     district: str = Query(...),
+    columns: str = Query(default=""),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
@@ -1244,6 +1268,12 @@ def export_district(
         raise HTTPException(500, "Ошибка чтения данных района")
 
     df_out = _pd.concat(dfs, ignore_index=True)
+
+    # ── filter columns if specified ───────────────────────────────────────────
+    if columns:
+        _cols = [c.strip() for c in columns.split(",") if c.strip() and c.strip() in df_out.columns]
+        if _cols:
+            df_out = df_out[_cols]
 
     # ── get district name for filename ────────────────────────────────────────
     district_name = district
