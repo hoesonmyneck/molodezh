@@ -250,7 +250,7 @@ function OkvedChart({ data, activeKeys, dimKey = 'okved', onToggle }) {
   )
 }
 
-function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, labelMap, activeKeys, dimKey, onToggle }) {
+function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, labelMap, activeKeys, dimKey, onToggle, hideLegend }) {
   if (!data?.length) return <EmptyState />
   const total = data.reduce((s, d) => s + d[valueKey], 0)
   return (
@@ -269,7 +269,7 @@ function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, 
         </Pie>
         <Tooltip formatter={(v) => fmt(v)} />
       </PieChart>
-      <div style={{ flex: 1 }}>
+      {!hideLegend && <div style={{ flex: 1 }}>
         {data.map((d, i) => {
           const isActive = activeKeys?.some(f => f.dim === dimKey && f.val === d[nameKey])
           const baseColor = colorMap ? (colorMap[d[nameKey]] || COLORS[i % COLORS.length]) : COLORS[i % COLORS.length]
@@ -285,7 +285,7 @@ function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, 
             </div>
           )
         })}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -857,7 +857,7 @@ export default function Dashboard({ globalFilters = [] }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
             <div>
               <SectionTitle>Категоризация домохозяйств — нажмите для фильтрации</SectionTitle>
-              <DonutChart data={cats} nameKey="category" colorMap={CAT_COLORS} labelMap={CAT_LABELS} activeKeys={af} dimKey="cat" onToggle={toggleFilter} />
+              <DonutChart data={cats} nameKey="category" colorMap={CAT_COLORS} activeKeys={af} dimKey="cat" onToggle={toggleFilter} hideLegend />
             </div>
             <div>
               <CatTable data={cats} activeKeys={af} onToggle={toggleFilter} />

@@ -96,6 +96,27 @@ function GlobalFilterBar({ onChange }) {
 
   const hasAny = Object.values(sel).some(Boolean)
 
+  const handleExport = async () => {
+    const districtCode = sel.district
+    if (!districtCode) return
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(`/api/data/export/district?district=${encodeURIComponent(districtCode)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) return
+      const blob = await res.blob()
+      const cd = res.headers.get('content-disposition') || ''
+      const match = cd.match(/filename\*?=(?:UTF-8'')?(.+)/i)
+      const filename = match ? decodeURIComponent(match[1].replace(/"/g, '')) : `${districtCode}.xlsx`
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = filename
+      document.body.appendChild(a); a.click()
+      document.body.removeChild(a); URL.revokeObjectURL(url)
+    } catch {}
+  }
+
   return (
     <div style={{
       background: '#f9fafb',
@@ -152,6 +173,19 @@ function GlobalFilterBar({ onChange }) {
           <option key={s} value={s}>{s}</option>
         ))}
       </select>
+
+      {sel.region && sel.district && (
+        <button
+          onClick={handleExport}
+          style={{
+            background: TEAL, border: 'none', color: '#fff',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            padding: '4px 12px', borderRadius: 6,
+          }}
+        >
+          Скачать Excel
+        </button>
+      )}
 
       {hasAny && (
         <button

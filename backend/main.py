@@ -1194,6 +1194,230 @@ def get_nationality(db: Session = Depends(get_db), _: User = Depends(get_current
     return result
 
 
+# ── District Excel export ─────────────────────────────────────────────────────
+@app.get("/api/data/export/district")
+def export_district(
+    district: str = Query(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    from sqlalchemy import func as _f
+    import io as _io
+    import openpyxl as _xl
+    from openpyxl.styles import Font as _Font, PatternFill as _Fill, Alignment as _Align, Border as _Border, Side as _Side
+    from openpyxl.utils import get_column_letter as _gcl
+    from fastapi.responses import StreamingResponse as _SR
+    from urllib.parse import quote as _quote
+
+    sid = get_active_session_id(db)
+    if not sid:
+        raise HTTPException(404, "No active session")
+
+    # ── district info ──────────────────────────────────────────────────────────
+    dist_row = (
+        db.query(MicroAgg.district_name, MicroAgg.region_name)
+        .filter(MicroAgg.session_id == sid, MicroAgg.district_code == district)
+        .first()
+    )
+    if not dist_row:
+        raise HTTPException(404, "District not found")
+    district_name = dist_row.district_name or district
+    region_name   = dist_row.region_name or ""
+
+    base = db.query(MicroAgg).filter(MicroAgg.session_id == sid, MicroAgg.district_code == district)
+
+    # ── aggregations ──────────────────────────────────────────────────────────
+    totals = base.with_entities(
+        _f.sum(MicroAgg.total_count),   _f.sum(MicroAgg.working_count),
+        _f.sum(MicroAgg.student_count), _f.sum(MicroAgg.tipo_count),
+        _f.sum(MicroAgg.unemployed_count), _f.sum(MicroAgg.uncovered_count),
+        _f.sum(MicroAgg.ip_count),      _f.sum(MicroAgg.lsi_count),
+        _f.sum(MicroAgg.under18_count), _f.sum(MicroAgg.foreign_count),
+        _f.sum(MicroAgg.asp_count),     _f.sum(MicroAgg.pensioner_count),
+        _f.sum(MicroAgg.kandas_count),  _f.sum(MicroAgg.mnogodetnyi_count),
+        _f.sum(MicroAgg.cbd_count),     _f.sum(MicroAgg.pregnant_count),
+        _f.sum(MicroAgg.contract_count),
+        _f.sum(MicroAgg.salary_sum),    _f.sum(MicroAgg.salary_count),
+    ).first()
+
+    age_rows  = base.with_entities(MicroAgg.age_group, _f.sum(MicroAgg.total_count).label("c")).group_by(MicroAgg.age_group).order_by(MicroAgg.age_group).all()
+    gen_rows  = base.with_entities(MicroAgg.gender,    _f.sum(MicroAgg.total_count).label("c")).group_by(MicroAgg.gender).order_by(_f.sum(MicroAgg.total_count).desc()).all()
+    cat_rows  = base.with_entities(MicroAgg.category,  _f.sum(MicroAgg.total_count).label("c")).group_by(MicroAgg.category).order_by(_f.sum(MicroAgg.total_count).desc()).all()
+    fam_rows  = base.with_entities(MicroAgg.family_type, _f.sum(MicroAgg.total_count).label("c")).filter(MicroAgg.family_type != '').group_by(MicroAgg.family_type).order_by(_f.sum(MicroAgg.total_count).desc()).all()
+
+    okved_rows = (
+        db.query(OkvedAgg.okved, _f.sum(OkvedAgg.total_count).label("c"),
+                 _f.sum(OkvedAgg.salary_sum).label("ss"), _f.sum(OkvedAgg.salary_count).label("sc"))
+        .filter(OkvedAgg.session_id == sid, OkvedAgg.district_code == district, OkvedAgg.okved != '')
+        .group_by(OkvedAgg.okved).order_by(_f.sum(OkvedAgg.total_count).desc()).limit(100).all()
+    )
+    nkz_rows = (
+        db.query(NkzAgg.nkz, _f.sum(NkzAgg.total_count).label("c"),
+                 _f.sum(NkzAgg.salary_sum).label("ss"), _f.sum(NkzAgg.salary_count).label("sc"))
+        .filter(NkzAgg.session_id == sid, NkzAgg.district_code == district, NkzAgg.nkz != '')
+        .group_by(NkzAgg.nkz).order_by(_f.sum(NkzAgg.total_count).desc()).limit(100).all()
+    )
+    nat_rows = (
+        db.query(NatAgg.nationality, _f.sum(NatAgg.total_count).label("c"))
+        .filter(NatAgg.session_id == sid, NatAgg.district_code == district, NatAgg.nationality != '')
+        .group_by(NatAgg.nationality).order_by(_f.sum(NatAgg.total_count).desc()).limit(100).all()
+    )
+
+    # ── build Excel ────────────────────────────────────────────────────────────
+    wb = _xl.Workbook()
+    TEAL   = "147A80"
+    WHITE  = "FFFFFF"
+    LIGHT  = "E6F4F5"
+
+    def _hdr(ws, row, col, val):
+        c = ws.cell(row=row, column=col, value=val)
+        c.font      = _Font(bold=True, color=WHITE, size=11)
+        c.fill      = _Fill("solid", fgColor=TEAL)
+        c.alignment = _Align(horizontal="center", vertical="center", wrap_text=True)
+        return c
+
+    def _title(ws, text):
+        ws.merge_cells("A1:D1")
+        c = ws["A1"]
+        c.value     = text
+        c.font      = _Font(bold=True, size=13, color=TEAL)
+        c.alignment = _Align(horizontal="left", vertical="center")
+        ws.row_dimensions[1].height = 22
+
+    def _autofit(ws, min_w=12, max_w=50):
+        for col in ws.columns:
+            best = min_w
+            for cell in col:
+                try:
+                    best = max(best, min(len(str(cell.value or "")), max_w))
+                except Exception:
+                    pass
+            ws.column_dimensions[_gcl(col[0].column)].width = best + 2
+
+    def _stripe(ws, data_start, n_rows, n_cols):
+        for r in range(data_start, data_start + n_rows):
+            if r % 2 == 0:
+                for ci in range(1, n_cols + 1):
+                    ws.cell(row=r, column=ci).fill = _Fill("solid", fgColor=LIGHT)
+
+    total = int(totals[0] or 0)
+    sal_s = float(totals[17] or 0)
+    sal_c = int(totals[18] or 0)
+    avg_sal = round(sal_s / sal_c) if sal_c > 0 else 0
+
+    # ── Sheet 1: Сводка ───────────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Сводка"
+    _title(ws1, f"Сводка: {district_name} ({region_name})")
+    ws1.row_dimensions[2].height = 4
+    _hdr(ws1, 3, 1, "Показатель"); _hdr(ws1, 3, 2, "Значение")
+    rows_data = [
+        ("Всего человек",              total),
+        ("Работающие",                 int(totals[1] or 0)),
+        ("Активный трудовой договор",  int(totals[16] or 0)),
+        ("Студент (ВУЗ)",              int(totals[2] or 0)),
+        ("ТИПО",                       int(totals[3] or 0)),
+        ("Безработные",                int(totals[4] or 0)),
+        ("Неохваченные",               int(totals[5] or 0)),
+        ("ИП",                         int(totals[6] or 0)),
+        ("ЛСИ",                        int(totals[7] or 0)),
+        ("Дети 14-18 лет",             int(totals[8] or 0)),
+        ("Иностранные граждане",       int(totals[9] or 0)),
+        ("Получатели АСП",             int(totals[10] or 0)),
+        ("Пенсионеры",                 int(totals[11] or 0)),
+        ("Кандасы",                    int(totals[12] or 0)),
+        ("Многодетные",                int(totals[13] or 0)),
+        ("Получатели пособий",         int(totals[14] or 0)),
+        ("Беременные",                 int(totals[15] or 0)),
+        ("Средняя зарплата (тг)",      avg_sal),
+    ]
+    for i, (k, v) in enumerate(rows_data, start=4):
+        ws1.cell(row=i, column=1, value=k)
+        ws1.cell(row=i, column=2, value=v).alignment = _Align(horizontal="right")
+    _stripe(ws1, 4, len(rows_data), 2)
+    _autofit(ws1)
+
+    # ── Sheet 2: Возраст и пол ────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Возраст и пол")
+    _title(ws2, f"Возраст и пол: {district_name}")
+    ws2.row_dimensions[2].height = 4
+    _hdr(ws2, 3, 1, "Возраст"); _hdr(ws2, 3, 2, "Кол-во")
+    for i, r in enumerate(age_rows, start=4):
+        ws2.cell(row=i, column=1, value=r.age_group)
+        ws2.cell(row=i, column=2, value=int(r.c)).alignment = _Align(horizontal="right")
+    off = len(age_rows) + 6
+    _hdr(ws2, off, 1, "Пол"); _hdr(ws2, off, 2, "Кол-во")
+    for i, r in enumerate(gen_rows, start=off + 1):
+        ws2.cell(row=i, column=1, value=r.gender)
+        ws2.cell(row=i, column=2, value=int(r.c)).alignment = _Align(horizontal="right")
+    _autofit(ws2)
+
+    # ── Sheet 3: Категории и тип семьи ────────────────────────────────────────
+    ws3 = wb.create_sheet("Категории")
+    _title(ws3, f"Категоризация: {district_name}")
+    ws3.row_dimensions[2].height = 4
+    CAT_L = {"A": "Отличный", "B": "Хороший", "C": "Средний", "D": "Критический", "E": "Экстренный"}
+    _hdr(ws3, 3, 1, "Категория"); _hdr(ws3, 3, 2, "Расшифровка"); _hdr(ws3, 3, 3, "Кол-во")
+    for i, r in enumerate(cat_rows, start=4):
+        ws3.cell(row=i, column=1, value=r.category)
+        ws3.cell(row=i, column=2, value=CAT_L.get(r.category, ""))
+        ws3.cell(row=i, column=3, value=int(r.c)).alignment = _Align(horizontal="right")
+    off3 = len(cat_rows) + 6
+    _hdr(ws3, off3, 1, "Тип семьи"); _hdr(ws3, off3, 2, "Кол-во")
+    for i, r in enumerate(fam_rows, start=off3 + 1):
+        ws3.cell(row=i, column=1, value=r.family_type)
+        ws3.cell(row=i, column=2, value=int(r.c)).alignment = _Align(horizontal="right")
+    _autofit(ws3)
+
+    # ── Sheet 4: ОКЭД ─────────────────────────────────────────────────────────
+    ws4 = wb.create_sheet("ОКЭД")
+    _title(ws4, f"ОКЭД: {district_name}")
+    ws4.row_dimensions[2].height = 4
+    _hdr(ws4, 3, 1, "ОКЭД"); _hdr(ws4, 3, 2, "Кол-во"); _hdr(ws4, 3, 3, "Средняя зп (тг)")
+    for i, r in enumerate(okved_rows, start=4):
+        ws4.cell(row=i, column=1, value=r.okved)
+        ws4.cell(row=i, column=2, value=int(r.c)).alignment = _Align(horizontal="right")
+        ss, sc = float(r.ss or 0), int(r.sc or 0)
+        ws4.cell(row=i, column=3, value=round(ss / sc) if sc > 0 else "—").alignment = _Align(horizontal="right")
+    _stripe(ws4, 4, len(okved_rows), 3)
+    _autofit(ws4)
+
+    # ── Sheet 5: НКЗ ──────────────────────────────────────────────────────────
+    ws5 = wb.create_sheet("НКЗ")
+    _title(ws5, f"НКЗ: {district_name}")
+    ws5.row_dimensions[2].height = 4
+    _hdr(ws5, 3, 1, "НКЗ"); _hdr(ws5, 3, 2, "Кол-во"); _hdr(ws5, 3, 3, "Средняя зп (тг)")
+    for i, r in enumerate(nkz_rows, start=4):
+        ws5.cell(row=i, column=1, value=r.nkz)
+        ws5.cell(row=i, column=2, value=int(r.c)).alignment = _Align(horizontal="right")
+        ss, sc = float(r.ss or 0), int(r.sc or 0)
+        ws5.cell(row=i, column=3, value=round(ss / sc) if sc > 0 else "—").alignment = _Align(horizontal="right")
+    _stripe(ws5, 4, len(nkz_rows), 3)
+    _autofit(ws5)
+
+    # ── Sheet 6: Национальность ───────────────────────────────────────────────
+    ws6 = wb.create_sheet("Национальность")
+    _title(ws6, f"Национальность: {district_name}")
+    ws6.row_dimensions[2].height = 4
+    _hdr(ws6, 3, 1, "Национальность"); _hdr(ws6, 3, 2, "Кол-во")
+    for i, r in enumerate(nat_rows, start=4):
+        ws6.cell(row=i, column=1, value=r.nationality)
+        ws6.cell(row=i, column=2, value=int(r.c)).alignment = _Align(horizontal="right")
+    _stripe(ws6, 4, len(nat_rows), 2)
+    _autofit(ws6)
+
+    output = _io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    safe = _quote(district_name.replace('"', ''))
+    return _SR(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{safe}.xlsx"},
+    )
+
+
 # ── Serve frontend build ───────────────────────────────────────────────────────
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.isdir(FRONTEND_DIST):
