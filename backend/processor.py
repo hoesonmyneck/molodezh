@@ -543,3 +543,14 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         "completed_at": datetime.utcnow(), "current_file": "",
     })
     db.commit()
+
+    # Flush WAL into main DB file after successful processing so the WAL
+    # doesn't accumulate to GB between cleanup runs.
+    try:
+        from database import DB_PATH as _DB_PATH
+        import sqlite3 as _sq3
+        _wc = _sq3.connect(_DB_PATH, timeout=30, isolation_level=None)
+        _wc.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        _wc.close()
+    except Exception:
+        pass

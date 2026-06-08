@@ -500,16 +500,15 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     except Exception:
         deleted_count = -1
 
-    # Run DELETEs + VACUUM in a background thread — VACUUM on a large DB can take
-    # several minutes, far exceeding the HTTP proxy timeout.
+    # Run DELETEs + VACUUM in a background thread.
     # _cleanup_lock is released by the background thread when it finishes.
     def _run():
         try:
+            # Step 1: delete rows using journal_mode=OFF so no WAL/journal space needed —
+            # writes go directly to DB pages even on a completely full disk.
             _c = _sq3.connect(DB_PATH, timeout=300, isolation_level=None)
             try:
-                # Flush + truncate WAL first — this frees disk space on full disks
-                # because WAL can grow to hundreds of MB when reads block checkpoints.
-                _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                _c.execute("PRAGMA journal_mode=OFF")
                 if active_id:
                     for t in tables:
                         _c.execute(f"DELETE FROM {t} WHERE session_id != ?", (active_id,))
@@ -518,17 +517,47 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
                     for t in tables:
                         _c.execute(f"DELETE FROM {t}")
                     _c.execute("DELETE FROM upload_sessions")
-                # VACUUM needs free space ≈ DB size; skip if disk is too full.
-                try:
-                    _st = os.statvfs(DATA_DIR)
-                    _free = _st.f_bavail * _st.f_bsize
-                    _db_sz = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
-                    if _free > _db_sz * 0.6:
-                        _c.execute("VACUUM")
-                except Exception:
-                    pass
             finally:
                 _c.close()
+
+            # Step 2: compact the DB.
+            # Primary: VACUUM INTO .new on /data + atomic os.rename (no window, no extra space
+            # beyond compact-DB size). Fallback: VACUUM INTO /tmp + remove-then-copy.
+            _tmp_data = DB_PATH + ".new"
+            _tmp_tmp  = "/tmp/molodezh_compact.db"
+            for _p in (_tmp_data, _tmp_tmp):
+                try:
+                    if os.path.exists(_p): os.remove(_p)
+                except Exception: pass
+            try:
+                _st   = os.statvfs(DATA_DIR)
+                _free = _st.f_bavail * _st.f_bsize
+                _dbsz = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
+                if _free > _dbsz * 0.5:
+                    # Enough space in /data: atomic rename keeps DB always accessible
+                    _cv = _sq3.connect(DB_PATH, timeout=300, isolation_level=None)
+                    try: _cv.execute(f"VACUUM INTO '{_tmp_data}'")
+                    finally: _cv.close()
+                    os.rename(_tmp_data, DB_PATH)
+                else:
+                    # /data too full: vacuum into /tmp then swap
+                    _cv = _sq3.connect(DB_PATH, timeout=300, isolation_level=None)
+                    try: _cv.execute(f"VACUUM INTO '{_tmp_tmp}'")
+                    finally: _cv.close()
+                    os.remove(DB_PATH)          # NullPool → no persistent fds → instant free
+                    import shutil as _sh
+                    _sh.copy2(_tmp_tmp, DB_PATH)
+                    try: os.remove(_tmp_tmp)
+                    except: pass
+                engine.dispose()
+                _cr = _sq3.connect(DB_PATH, timeout=10, isolation_level=None)
+                try: _cr.execute("PRAGMA journal_mode=WAL")
+                finally: _cr.close()
+            except Exception:
+                for _p in (_tmp_data, _tmp_tmp):
+                    try:
+                        if os.path.exists(_p): os.remove(_p)
+                    except: pass
         finally:
             _cleanup_lock.release()
 
