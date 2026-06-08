@@ -56,6 +56,8 @@ class RegionBreakdown(Base):
     region_code = Column(String)
     region_name = Column(String)
     count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
 
 
 class DistrictBreakdown(Base):
@@ -67,6 +69,8 @@ class DistrictBreakdown(Base):
     district_code = Column(String)
     district_name = Column(String)
     count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
 
 
 class AgeDistribution(Base):
@@ -101,6 +105,8 @@ class OkvedStats(Base):
     session_id = Column(Integer, ForeignKey("upload_sessions.id"))
     okved_name = Column(String)
     count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
 
 
 class NationalityStats(Base):
@@ -357,3 +363,30 @@ class MigrationStats(Base):
     region_name = Column(String(120), default='')
     departed = Column(Integer, default=0)
     arrived = Column(Integer, default=0)
+
+
+class FamilyTypeStats(Base):
+    __tablename__ = "family_type_stats"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    family_type = Column(String(120), default='')
+    count = Column(Integer, default=0)
+
+
+class NkzStats(Base):
+    __tablename__ = "nkz_stats"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    nkz_name = Column(String(220), default='')
+    count = Column(Integer, default=0)
+    salary_sum = Column(Float, default=0.0)
+    salary_count = Column(Integer, default=0)
+
+
+class EduStats(Base):
+    __tablename__ = "edu_stats"
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id"))
+    edu_type = Column(String(10), default='')
+    edu_name = Column(String(220), default='')
+    count = Column(Integer, default=0)

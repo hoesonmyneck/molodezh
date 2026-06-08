@@ -8,6 +8,7 @@ from models import (
     KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
     AgeDistribution, Categorization, GenderStats, OkvedStats,
     NationalityStats, UploadSession, MicroAgg, OkvedAgg, NatAgg, NkzAgg, EduAgg, MigrationStats,
+    FamilyTypeStats, NkzStats, EduStats,
 )
 
 
@@ -84,9 +85,18 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     cat_counts: dict[str, int] = defaultdict(int)
     gender_counts: dict[str, int] = defaultdict(int)
     okved_counts: dict[str, int] = defaultdict(int)
+    okved_salary_sum: dict[str, float] = defaultdict(float)
+    okved_salary_cnt: dict[str, int] = defaultdict(int)
     nationality_counts: dict[str, int] = defaultdict(int)
     departed_counts: dict[str, int] = defaultdict(int)
     arrived_counts: dict[str, int] = defaultdict(int)
+    region_salary_sum: dict[str, float] = defaultdict(float)
+    region_salary_cnt: dict[str, int] = defaultdict(int)
+    nkz_counts: dict[str, int] = defaultdict(int)
+    nkz_salary_sum: dict[str, float] = defaultdict(float)
+    nkz_salary_cnt: dict[str, int] = defaultdict(int)
+    family_type_counts: dict[str, int] = defaultdict(int)
+    edu_counts: dict[tuple, int] = defaultdict(int)
 
     total_files = len(file_paths)
 
@@ -278,7 +288,7 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             if _nkz_col:
                 for nm, cnt in df[_nkz_col].dropna().value_counts().items():
                     if str(nm) not in ("nan", "None"):
-                        pass  # NkzAgg is queried directly, no separate NkzStats
+                        nkz_counts[str(nm)] += int(cnt)
 
             if "NATIONALTY" in df.columns:
                 for nat, cnt in df["NATIONALTY"].dropna().value_counts().items():
@@ -357,6 +367,37 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             rec_df["_age_pos"] = (rec_df["age_val"] > 0).astype(int)
             rec_df["_age_sum"] = rec_df["age_val"] * rec_df["_age_pos"]
 
+            # ── Salary by region ──────────────────────────────────────────────
+            _rs = rec_df[rec_df["region_code"] != ""][["region_code", "salary", "_sal_pos"]]
+            if len(_rs):
+                _rg = _rs.groupby("region_code").agg(s=("salary", "sum"), c=("_sal_pos", "sum"))
+                for rc, row in _rg.iterrows():
+                    region_salary_sum[rc] += float(row["s"])
+                    region_salary_cnt[rc] += int(row["c"])
+
+            # ── Salary by okved ───────────────────────────────────────────────
+            if _okved_col:
+                _os = rec_df[rec_df["okved"] != ""][["okved", "salary", "_sal_pos"]]
+                if len(_os):
+                    _og = _os.groupby("okved").agg(s=("salary", "sum"), c=("_sal_pos", "sum"))
+                    for ov, row in _og.iterrows():
+                        okved_salary_sum[ov] += float(row["s"])
+                        okved_salary_cnt[ov] += int(row["c"])
+
+            # ── NKZ salary ────────────────────────────────────────────────────
+            if _nkz_col:
+                _ns = rec_df[rec_df["nkz"] != ""][["nkz", "salary", "_sal_pos"]]
+                if len(_ns):
+                    _ng = _ns.groupby("nkz").agg(s=("salary", "sum"), c=("_sal_pos", "sum"))
+                    for nk, row in _ng.iterrows():
+                        nkz_salary_sum[nk] += float(row["s"])
+                        nkz_salary_cnt[nk] += int(row["c"])
+
+            # ── Family type ───────────────────────────────────────────────────
+            if "FAMILY_TYPE" in df.columns:
+                for ft, cnt in fam_col[fam_col != ""].value_counts().items():
+                    family_type_counts[str(ft)] += int(cnt)
+
             agg_chunks.append(rec_df.groupby(_DIM_COLS, as_index=False, sort=False).agg(_AGG_SPEC))
 
             _okved_df = rec_df[rec_df["okved"] != ""]
@@ -389,6 +430,9 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
             if edu_parts:
                 _edu_df = pd.concat(edu_parts, ignore_index=True)
                 edu_chunks.append(_edu_df.groupby(_EDU_DIM_COLS, as_index=False, sort=False).agg(_ST_AGG_SPEC))
+                for (etype_k, ename_k), cnt in _edu_df.groupby(["edu_type", "edu_name"]).size().items():
+                    if ename_k:
+                        edu_counts[(etype_k, ename_k)] += int(cnt)
 
             del df, rec_df  # free each chunk immediately before the next
 
@@ -442,8 +486,12 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     for name, count in status_counts.items():
         db.add(StatusBreakdown(session_id=session_id, status_name=name, count=count))
     for code, count in region_counts.items():
-        db.add(RegionBreakdown(session_id=session_id, region_code=code,
-                               region_name=region_names.get(code, code), count=count))
+        db.add(RegionBreakdown(
+            session_id=session_id, region_code=code,
+            region_name=region_names.get(code, code), count=count,
+            salary_sum=region_salary_sum.get(code, 0.0),
+            salary_count=region_salary_cnt.get(code, 0),
+        ))
     for key, count in district_counts.items():
         info = district_info.get(key, {})
         db.add(DistrictBreakdown(
@@ -460,9 +508,25 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
     for gen, count in gender_counts.items():
         db.add(GenderStats(session_id=session_id, gender=gen, count=count))
     for nm, count in sorted(okved_counts.items(), key=lambda x: -x[1])[:20]:
-        db.add(OkvedStats(session_id=session_id, okved_name=nm, count=count))
+        db.add(OkvedStats(
+            session_id=session_id, okved_name=nm, count=count,
+            salary_sum=okved_salary_sum.get(nm, 0.0),
+            salary_count=okved_salary_cnt.get(nm, 0),
+        ))
     for nat, count in sorted(nationality_counts.items(), key=lambda x: -x[1])[:20]:
         db.add(NationalityStats(session_id=session_id, nationality=nat, count=count))
+    for ft, count in sorted(family_type_counts.items(), key=lambda x: -x[1]):
+        if ft:
+            db.add(FamilyTypeStats(session_id=session_id, family_type=ft, count=count))
+    for nm, count in sorted(nkz_counts.items(), key=lambda x: -x[1])[:20]:
+        db.add(NkzStats(
+            session_id=session_id, nkz_name=nm, count=count,
+            salary_sum=nkz_salary_sum.get(nm, 0.0),
+            salary_count=nkz_salary_cnt.get(nm, 0),
+        ))
+    for (etype, ename), count in sorted(edu_counts.items(), key=lambda x: -x[1]):
+        if ename:
+            db.add(EduStats(session_id=session_id, edu_type=etype, edu_name=ename, count=count))
     all_mig_regions = sorted(set(departed_counts.keys()) | set(arrived_counts.keys()))
     for reg in all_mig_regions:
         db.add(MigrationStats(
