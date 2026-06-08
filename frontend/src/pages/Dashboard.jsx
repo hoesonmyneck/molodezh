@@ -279,7 +279,7 @@ function DonutChart({ data, nameKey = 'category', valueKey = 'count', colorMap, 
               style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, cursor: onToggle ? 'pointer' : 'default', borderRadius: 4, padding: '2px 4px', background: isActive ? '#e6f4f5' : 'transparent' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <div style={{ width: 10, height: 10, borderRadius: 2, background: isActive ? TEAL_DARK : baseColor }} />
-                <span style={{ color: '#374151' }}>{labelMap?.[d[nameKey]] || d[nameKey]}</span>
+                <span style={{ color: '#374151' }}>{d[nameKey]}</span>
               </div>
               <div style={{ fontWeight: 600, color: TEAL }}>{total ? ((d[valueKey] / total) * 100).toFixed(1) + '%' : '—'}</div>
             </div>

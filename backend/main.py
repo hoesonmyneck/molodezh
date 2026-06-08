@@ -947,6 +947,14 @@ def get_filtered_data(
         if cache_key in _filter_cache:
             return _filter_cache[cache_key]
 
+    # ── Try DuckDB first (10-20x faster for analytical GROUP BY) ─────────────
+    from duck_filter import run_duck_filter
+    duck_result = run_duck_filter(sid, filters, DB_PATH)
+    if duck_result is not None:
+        with _filter_cache_lock:
+            _filter_cache[cache_key] = duck_result
+        return duck_result
+
     from sqlalchemy import func
 
     # ── Primary table: MicroAgg normally; OkvedAgg/NatAgg when that dim is filtered ──
