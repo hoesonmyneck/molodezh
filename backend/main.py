@@ -507,6 +507,9 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
         try:
             _c = _sq3.connect(DB_PATH, timeout=300, isolation_level=None)
             try:
+                # Flush + truncate WAL first — this frees disk space on full disks
+                # because WAL can grow to hundreds of MB when reads block checkpoints.
+                _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 if active_id:
                     for t in tables:
                         _c.execute(f"DELETE FROM {t} WHERE session_id != ?", (active_id,))
@@ -515,7 +518,15 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
                     for t in tables:
                         _c.execute(f"DELETE FROM {t}")
                     _c.execute("DELETE FROM upload_sessions")
-                _c.execute("VACUUM")
+                # VACUUM needs free space ≈ DB size; skip if disk is too full.
+                try:
+                    _st = os.statvfs(DATA_DIR)
+                    _free = _st.f_bavail * _st.f_bsize
+                    _db_sz = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
+                    if _free > _db_sz * 0.6:
+                        _c.execute("VACUUM")
+                except Exception:
+                    pass
             finally:
                 _c.close()
         finally:
