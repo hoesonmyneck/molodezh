@@ -92,9 +92,18 @@ with engine.connect() as _conn:
 
 app = FastAPI(title="Молодежь РК")
 
-# ── In-memory filter cache (cleared on reprocess/upload) ─────────────────────
+# ── In-memory caches (cleared on reprocess/upload) ───────────────────────────
 _filter_cache: dict = {}
+_data_cache: dict = {}
 _filter_cache_lock = threading.Lock()
+
+def _dc_get(key):
+    with _filter_cache_lock:
+        return _data_cache.get(key)
+
+def _dc_set(key, val):
+    with _filter_cache_lock:
+        _data_cache[key] = val
 
 # ── DB cleanup global lock — prevents concurrent cleanup_db runs ──────────────
 _cleanup_lock = threading.Lock()
@@ -294,6 +303,7 @@ async def upload_files(
 
     with _filter_cache_lock:
         _filter_cache.clear()
+        _data_cache.clear()
     threading.Thread(target=_run, daemon=True).start()
     return {"session_id": session.id, "files": len(files)}
 
@@ -360,6 +370,7 @@ def reprocess_session(
 
     with _filter_cache_lock:
         _filter_cache.clear()
+        _data_cache.clear()
 
     for model in [KpiStats, StatusBreakdown, RegionBreakdown, DistrictBreakdown,
                   AgeDistribution, Categorization, GenderStats, OkvedStats,
@@ -531,10 +542,13 @@ def get_kpis(db: Session = Depends(get_db), _: User = Depends(get_current_user))
     sid = get_active_session_id(db)
     if not sid:
         return {"no_data": True}
+    cached = _dc_get(("kpis", sid))
+    if cached is not None:
+        return cached
     kpi = db.query(KpiStats).filter(KpiStats.session_id == sid).first()
     if not kpi:
         return {"no_data": True}
-    return {
+    result = {
         "total_persons": kpi.total_persons,
         "total_families": kpi.total_families,
         "working": kpi.working,
@@ -545,6 +559,8 @@ def get_kpis(db: Session = Depends(get_db), _: User = Depends(get_current_user))
         "avg_age": kpi.avg_age,
         "median_age": kpi.median_age,
     }
+    _dc_set(("kpis", sid), result)
+    return result
 
 
 @app.get("/api/data/statuses")
@@ -552,13 +568,18 @@ def get_statuses(db: Session = Depends(get_db), _: User = Depends(get_current_us
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("statuses", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(StatusBreakdown)
         .filter(StatusBreakdown.session_id == sid)
         .order_by(StatusBreakdown.count.desc())
         .all()
     )
-    return [{"name": r.status_name, "count": r.count} for r in rows]
+    result = [{"name": r.status_name, "count": r.count} for r in rows]
+    _dc_set(("statuses", sid), result)
+    return result
 
 
 @app.get("/api/data/regions")
@@ -567,6 +588,9 @@ def get_regions(db: Session = Depends(get_db), _: User = Depends(get_current_use
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("regions", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(
             MicroAgg.region_code, MicroAgg.region_name,
@@ -579,13 +603,15 @@ def get_regions(db: Session = Depends(get_db), _: User = Depends(get_current_use
         .order_by(func.sum(MicroAgg.total_count).desc())
         .all()
     )
-    return [
+    result = [
         {
             "code": r.region_code, "name": r.region_name, "count": int(r.c),
             "avg_salary": round(float(r.sal_sum) / int(r.sal_cnt)) if (r.sal_cnt and int(r.sal_cnt) > 0) else 0,
         }
         for r in rows
     ]
+    _dc_set(("regions", sid), result)
+    return result
 
 
 @app.get("/api/data/districts")
@@ -597,11 +623,14 @@ def get_districts(
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("districts", sid, region_code or ""))
+    if cached is not None:
+        return cached
     q = db.query(DistrictBreakdown).filter(DistrictBreakdown.session_id == sid)
     if region_code:
         q = q.filter(DistrictBreakdown.region_code == region_code)
     rows = q.order_by(DistrictBreakdown.count.desc()).all()
-    return [
+    result = [
         {
             "region_code": r.region_code, "region_name": r.region_name,
             "district_code": r.district_code, "district_name": r.district_name,
@@ -609,6 +638,8 @@ def get_districts(
         }
         for r in rows
     ]
+    _dc_set(("districts", sid, region_code or ""), result)
+    return result
 
 
 @app.get("/api/data/age-groups")
@@ -616,13 +647,18 @@ def get_age_groups(db: Session = Depends(get_db), _: User = Depends(get_current_
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("age_groups", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(AgeDistribution)
         .filter(AgeDistribution.session_id == sid)
         .order_by(AgeDistribution.min_age)
         .all()
     )
-    return [{"group": r.age_group, "count": r.count} for r in rows]
+    result = [{"group": r.age_group, "count": r.count} for r in rows]
+    _dc_set(("age_groups", sid), result)
+    return result
 
 
 @app.get("/api/data/categorization")
@@ -630,13 +666,18 @@ def get_categorization(db: Session = Depends(get_db), _: User = Depends(get_curr
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("categorization", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(Categorization)
         .filter(Categorization.session_id == sid)
         .order_by(Categorization.count.desc())
         .all()
     )
-    return [{"category": r.category, "count": r.count} for r in rows]
+    result = [{"category": r.category, "count": r.count} for r in rows]
+    _dc_set(("categorization", sid), result)
+    return result
 
 
 @app.get("/api/data/gender")
@@ -644,8 +685,13 @@ def get_gender(db: Session = Depends(get_db), _: User = Depends(get_current_user
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("gender", sid))
+    if cached is not None:
+        return cached
     rows = db.query(GenderStats).filter(GenderStats.session_id == sid).all()
-    return [{"gender": r.gender, "count": r.count} for r in rows]
+    result = [{"gender": r.gender, "count": r.count} for r in rows]
+    _dc_set(("gender", sid), result)
+    return result
 
 
 @app.get("/api/data/okved")
@@ -654,6 +700,9 @@ def get_okved(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("okved", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(
             OkvedAgg.okved,
@@ -667,13 +716,15 @@ def get_okved(db: Session = Depends(get_db), _: User = Depends(get_current_user)
         .limit(20)
         .all()
     )
-    return [
+    result = [
         {
             "name": r.okved, "count": int(r.c),
             "avg_salary": round(float(r.sal_sum) / int(r.sal_cnt)) if (r.sal_cnt and int(r.sal_cnt) > 0) else 0,
         }
         for r in rows
     ]
+    _dc_set(("okved", sid), result)
+    return result
 
 
 @app.get("/api/data/nkz")
@@ -682,6 +733,9 @@ def get_nkz(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("nkz", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(
             NkzAgg.nkz,
@@ -695,13 +749,15 @@ def get_nkz(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
         .limit(20)
         .all()
     )
-    return [
+    result = [
         {
             "name": r.nkz, "count": int(r.c),
             "avg_salary": round(float(r.sal_sum) / int(r.sal_cnt)) if (r.sal_cnt and int(r.sal_cnt) > 0) else 0,
         }
         for r in rows
     ]
+    _dc_set(("nkz", sid), result)
+    return result
 
 
 @app.get("/api/data/family-type")
@@ -710,6 +766,9 @@ def get_family_type(db: Session = Depends(get_db), _: User = Depends(get_current
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("family_type", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(MicroAgg.family_type, func.sum(MicroAgg.total_count).label("c"))
         .filter(MicroAgg.session_id == sid, MicroAgg.family_type != '')
@@ -717,7 +776,9 @@ def get_family_type(db: Session = Depends(get_db), _: User = Depends(get_current
         .order_by(func.sum(MicroAgg.total_count).desc())
         .all()
     )
-    return [{"family_type": r.family_type, "count": int(r.c)} for r in rows]
+    result = [{"family_type": r.family_type, "count": int(r.c)} for r in rows]
+    _dc_set(("family_type", sid), result)
+    return result
 
 
 @app.get("/api/data/edu")
@@ -730,6 +791,9 @@ def get_edu(
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("edu", sid, edu_type))
+    if cached is not None:
+        return cached
     rows = (
         db.query(EduAgg.edu_name, func.sum(EduAgg.total_count).label("c"))
         .filter(EduAgg.session_id == sid, EduAgg.edu_type == edu_type, EduAgg.edu_name != '')
@@ -737,7 +801,9 @@ def get_edu(
         .order_by(func.sum(EduAgg.total_count).desc())
         .all()
     )
-    return [{"name": r.edu_name, "count": int(r.c)} for r in rows]
+    result = [{"name": r.edu_name, "count": int(r.c)} for r in rows]
+    _dc_set(("edu", sid, edu_type), result)
+    return result
 
 
 _STATUS_COUNT_COL = {
@@ -1063,13 +1129,18 @@ def get_migration(db: Session = Depends(get_db), _: User = Depends(get_current_u
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("migration", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(MigrationStats)
         .filter(MigrationStats.session_id == sid)
         .order_by(MigrationStats.departed.desc())
         .all()
     )
-    return [{"region": r.region_name, "departed": r.departed, "arrived": r.arrived} for r in rows]
+    result = [{"region": r.region_name, "departed": r.departed, "arrived": r.arrived} for r in rows]
+    _dc_set(("migration", sid), result)
+    return result
 
 
 @app.get("/api/data/nationality")
@@ -1077,6 +1148,9 @@ def get_nationality(db: Session = Depends(get_db), _: User = Depends(get_current
     sid = get_active_session_id(db)
     if not sid:
         return []
+    cached = _dc_get(("nationality", sid))
+    if cached is not None:
+        return cached
     rows = (
         db.query(NationalityStats)
         .filter(NationalityStats.session_id == sid)
@@ -1084,7 +1158,9 @@ def get_nationality(db: Session = Depends(get_db), _: User = Depends(get_current
         .limit(20)
         .all()
     )
-    return [{"nationality": r.nationality, "count": r.count} for r in rows]
+    result = [{"nationality": r.nationality, "count": r.count} for r in rows]
+    _dc_set(("nationality", sid), result)
+    return result
 
 
 # ── Serve frontend build ───────────────────────────────────────────────────────
