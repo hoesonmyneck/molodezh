@@ -8,3 +8,4 @@ openpyxl==3.1.2
 python-multipart==0.0.9
 aiofiles==23.2.1
 duckdb>=1.0.0
+pyarrow>=14.0.0
