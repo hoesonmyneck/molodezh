@@ -8,7 +8,7 @@ import 'leaflet/dist/leaflet.css'
 import {
   getKpis, getStatuses, getRegions,
   getAgeGroups, getCategorization, getGender, getOkved, getNkz, getNationality,
-  getFamilyType, getEdu, getMigration, getFiltered,
+  getFamilyType, getEdu, getMigration, getFiltered, getIrm, getCkm,
 } from '../api'
 
 const TEAL = '#147a80'
@@ -66,18 +66,20 @@ function KpiCard({ title, main, sub, subLabel, onSubClick, activeFilter }) {
 
 function Tabs({ tabs, active, onChange }) {
   return (
-    <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
-      {tabs.map((t) => (
-        <button key={t.key} onClick={() => onChange(t.key)} style={{
-          padding: '8px 14px', fontSize: 12, fontWeight: 500,
-          border: 'none', background: 'transparent',
-          borderBottom: active === t.key ? `2px solid ${TEAL}` : '2px solid transparent',
-          color: active === t.key ? TEAL : 'var(--muted)',
-          marginBottom: -1, whiteSpace: 'nowrap', cursor: 'pointer',
-        }}>
-          {t.label}
-        </button>
-      ))}
+    <div style={{ overflowX: 'auto', overflowY: 'hidden', borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 2, minWidth: 'max-content' }}>
+        {tabs.map((t) => (
+          <button key={t.key} onClick={() => onChange(t.key)} style={{
+            padding: '8px 14px', fontSize: 12, fontWeight: 500,
+            border: 'none', background: 'transparent',
+            borderBottom: active === t.key ? `2px solid ${TEAL}` : '2px solid transparent',
+            color: active === t.key ? TEAL : 'var(--muted)',
+            marginBottom: -1, whiteSpace: 'nowrap', cursor: 'pointer',
+          }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -433,34 +435,260 @@ function CatTable({ data, activeKeys, onToggle }) {
   )
 }
 
-function MigrationTable({ data }) {
+function MigrationChart({ data }) {
+  const [view, setView] = useState('flow')
   if (!data?.length) return <EmptyState />
+
+  const rows = [...data]
+    .map(r => ({ ...r, balance: r.arrived - r.departed }))
+    .sort((a, b) => b.arrived - a.arrived)
+
+  const rowsBal = [...rows].sort((a, b) => b.balance - a.balance)
+
+  const btnStyle = (v) => ({
+    padding: '5px 14px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+    border: `1px solid ${view === v ? TEAL : 'var(--border)'}`,
+    borderRadius: 6,
+    background: view === v ? TEAL : '#fff',
+    color: view === v ? '#fff' : 'var(--muted)',
+  })
+
+  const FlowTip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    return (
+      <div style={{ background: '#1f2937', color: '#fff', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+        {payload.map((p, i) => (
+          <div key={i} style={{ color: p.color }}>{p.name}: {fmt(p.value)}</div>
+        ))}
+      </div>
+    )
+  }
+
+  const BalTip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    const v = payload[0].value
+    return (
+      <div style={{ background: '#1f2937', color: '#fff', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+        <div style={{ color: v >= 0 ? '#4ade80' : '#f87171' }}>
+          Сальдо: {v > 0 ? '+' : ''}{fmt(v)}
+        </div>
+      </div>
+    )
+  }
+
+  const yWidth = 200
+
   return (
-    <div style={{ overflowY: 'auto', maxHeight: 420 }}>
+    <>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+        <button style={btnStyle('flow')} onClick={() => setView('flow')}>Прибытие / Отбытие</button>
+        <button style={btnStyle('balance')} onClick={() => setView('balance')}>Сальдо</button>
+      </div>
+
+      {view === 'flow' && (
+        <ResponsiveContainer width="100%" height={Math.max(420, rows.length * 44)}>
+          <BarChart data={rows} layout="vertical"
+            margin={{ top: 0, right: 55, left: 4, bottom: 0 }}
+            barSize={10} barCategoryGap="30%">
+            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" />
+            <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+            <YAxis dataKey="region" type="category" width={yWidth}
+              tick={{ fontSize: 11, fill: '#374151' }} axisLine={false} tickLine={false} />
+            <Tooltip content={<FlowTip />} cursor={{ fill: '#f8fafc' }} />
+            <Bar dataKey="arrived" name="Прибыло" fill="#16a34a" radius={[0, 3, 3, 0]}
+              label={{ position: 'right', fontSize: 10, fill: '#16a34a', formatter: fmt }} />
+            <Bar dataKey="departed" name="Отбыло" fill="#dc2626" radius={[0, 3, 3, 0]}
+              label={{ position: 'right', fontSize: 10, fill: '#dc2626', formatter: fmt }} />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+
+      {view === 'balance' && (
+        <ResponsiveContainer width="100%" height={Math.max(340, rowsBal.length * 30)}>
+          <BarChart data={rowsBal} layout="vertical"
+            margin={{ top: 0, right: 60, left: 4, bottom: 0 }}
+            barSize={14}>
+            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" />
+            <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+            <YAxis dataKey="region" type="category" width={yWidth}
+              tick={{ fontSize: 11, fill: '#374151' }} axisLine={false} tickLine={false} />
+            <Tooltip content={<BalTip />} cursor={{ fill: '#f8fafc' }} />
+            <Bar dataKey="balance" name="Сальдо" radius={[0, 3, 3, 0]}
+              label={{ position: 'right', fontSize: 10, fill: '#6b7280',
+                formatter: (v) => (v > 0 ? '+' : '') + fmt(v) }}>
+              {rowsBal.map((entry, i) => (
+                <Cell key={i} fill={entry.balance >= 0 ? '#16a34a' : '#dc2626'} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </>
+  )
+}
+
+function IrmTable({ category }) {
+  const [sortCol, setSortCol] = useState(null)
+  const [sortAsc, setSortAsc] = useState(true)
+
+  if (!category) return <EmptyState />
+  const [regionCol, ...indCols] = category.columns
+  const colClean = (col) => {
+    if (col === 'ИРМ') return 'ИРМ'
+    // "J1.«Образование и наука»" → "Образование и наука"
+    const m = col.match(/[««""](.+?)[»»""]/)
+    if (m) return m[1]
+    return col
+  }
+  const isMainCol = (col) => /^J\d/.test(col) || col === 'ИРМ'
+
+  const handleSort = (colIdx) => {
+    if (sortCol === colIdx) setSortAsc(a => !a)
+    else { setSortCol(colIdx); setSortAsc(true) }
+  }
+
+  const sortedRows = sortCol === null ? category.rows : [...category.rows].sort((a, b) => {
+    const av = a[sortCol], bv = b[sortCol]
+    if (typeof av === 'number' && typeof bv === 'number') return sortAsc ? av - bv : bv - av
+    return sortAsc ? String(av).localeCompare(String(bv), 'ru') : String(bv).localeCompare(String(av), 'ru')
+  })
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-        <thead style={{ position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+        <thead>
           <tr style={{ borderBottom: '1px solid var(--border)' }}>
-            <th style={th}>Регион</th>
-            <th style={{ ...th, textAlign: 'right', color: '#dc2626' }}>Отбыло</th>
-            <th style={{ ...th, textAlign: 'right', color: '#16a34a' }}>Прибыло</th>
-            <th style={{ ...th, textAlign: 'right' }}>Динамика</th>
+            <th
+              onClick={() => handleSort(0)}
+              style={{ ...th, minWidth: 170, position: 'sticky', left: 0, background: '#fff', zIndex: 1, cursor: 'pointer', userSelect: 'none' }}
+            >
+              {regionCol} {sortCol === 0 ? (sortAsc ? '↑' : '↓') : ''}
+            </th>
+            {indCols.map((col, i) => {
+              const ci = i + 1
+              const isMain = isMainCol(col)
+              const sorted = sortCol === ci
+              return (
+                <th key={i} title={col}
+                  onClick={() => handleSort(ci)}
+                  style={{
+                    ...th, textAlign: 'right', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
+                    fontWeight: isMain ? 700 : 600,
+                    color: sorted ? TEAL_DARK : isMain ? TEAL : 'var(--muted)',
+                    minWidth: 72,
+                    background: sorted ? '#e6f4f5' : undefined,
+                  }}
+                >
+                  {colClean(col)} {sorted ? (sortAsc ? '↑' : '↓') : ''}
+                </th>
+              )
+            })}
           </tr>
         </thead>
         <tbody>
-          {data.map((r, i) => {
-            const net = r.arrived - r.departed
-            return (
-              <tr key={i} style={{ borderBottom: '1px solid #f9fafb' }}>
-                <td style={{ padding: '8px 4px' }}>{r.region}</td>
-                <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 600, color: '#dc2626' }}>{fmt(r.departed)}</td>
-                <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 600, color: '#16a34a' }}>{fmt(r.arrived)}</td>
-                <td style={{ padding: '8px 4px', textAlign: 'right', fontWeight: 700,
-                  color: net > 0 ? '#16a34a' : net < 0 ? '#dc2626' : '#9ca3af' }}>
-                  {net > 0 ? '+' : ''}{fmt(net)}
+          {sortedRows.map((row, ri) => (
+            <tr key={ri} style={{ borderBottom: '1px solid #f9fafb' }}>
+              {row.map((val, ci) => {
+                const col = category.columns[ci]
+                const isMain = ci > 0 && isMainCol(col)
+                return (
+                  <td key={ci} style={{
+                    padding: '7px 4px',
+                    textAlign: ci === 0 ? 'left' : 'right',
+                    fontWeight: isMain ? 700 : 400,
+                    color: ci === 0 ? '#374151' : isMain ? TEAL : '#6b7280',
+                    background: ci === 0 ? '#fff' : undefined,
+                    position: ci === 0 ? 'sticky' : undefined,
+                    left: ci === 0 ? 0 : undefined,
+                    zIndex: ci === 0 ? 1 : undefined,
+                  }}>
+                    {ci === 0 ? val : typeof val === 'number' ? (val * 100).toFixed(3) : val}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function CkmTable({ category }) {
+  const [sortCol, setSortCol] = useState(null)
+  const [sortAsc, setSortAsc] = useState(true)
+
+  if (!category) return <EmptyState />
+  const [regionCol, ...indCols] = category.columns
+
+  const handleSort = (colIdx) => {
+    if (sortCol === colIdx) setSortAsc(a => !a)
+    else { setSortCol(colIdx); setSortAsc(true) }
+  }
+
+  const sortedRows = sortCol === null ? category.rows : [...category.rows].sort((a, b) => {
+    const av = a[sortCol], bv = b[sortCol]
+    if (typeof av === 'number' && typeof bv === 'number') return sortAsc ? av - bv : bv - av
+    return sortAsc ? String(av).localeCompare(String(bv), 'ru') : String(bv).localeCompare(String(av), 'ru')
+  })
+
+  const fmtVal = (v) => {
+    if (v == null) return '—'
+    if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString('ru-RU') : v.toFixed(2)
+    return String(v)
+  }
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+            <th
+              onClick={() => handleSort(0)}
+              style={{ ...th, minWidth: 170, position: 'sticky', left: 0, background: '#fff', zIndex: 1, cursor: 'pointer', userSelect: 'none' }}
+            >
+              {regionCol} {sortCol === 0 ? (sortAsc ? '↑' : '↓') : ''}
+            </th>
+            {indCols.map((col, i) => {
+              const ci = i + 1
+              const sorted = sortCol === ci
+              const label = String(col).length > 14 ? String(col).slice(0, 13) + '…' : col
+              return (
+                <th key={i} title={String(col)}
+                  onClick={() => handleSort(ci)}
+                  style={{
+                    ...th, textAlign: 'right', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none',
+                    color: sorted ? TEAL_DARK : 'var(--muted)',
+                    minWidth: 72,
+                    background: sorted ? '#e6f4f5' : undefined,
+                  }}
+                >
+                  {label} {sorted ? (sortAsc ? '↑' : '↓') : ''}
+                </th>
+              )
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {sortedRows.map((row, ri) => (
+            <tr key={ri} style={{ borderBottom: '1px solid #f9fafb' }}>
+              {row.map((val, ci) => (
+                <td key={ci} style={{
+                  padding: '7px 4px',
+                  textAlign: ci === 0 ? 'left' : 'right',
+                  color: ci === 0 ? '#374151' : '#6b7280',
+                  background: ci === 0 ? '#fff' : undefined,
+                  position: ci === 0 ? 'sticky' : undefined,
+                  left: ci === 0 ? 0 : undefined,
+                  zIndex: ci === 0 ? 1 : undefined,
+                }}>
+                  {ci === 0 ? val : fmtVal(val)}
                 </td>
-              </tr>
-            )
-          })}
+              ))}
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -653,6 +881,10 @@ export default function Dashboard({ globalFilters = [] }) {
   const [leftTab, setLeftTab] = useState('statuses')
   const [rightTab, setRightTab] = useState('age')
   const [eduTab, setEduTab] = useState('vuz')
+  const [irmData, setIrmData] = useState([])
+  const [irmTab, setIrmTab] = useState('')
+  const [ckmData, setCkmData] = useState([])
+  const [ckmTab, setCkmTab] = useState('')
 
   const loadBase = useCallback(async () => {
     try {
@@ -671,6 +903,26 @@ export default function Dashboard({ globalFilters = [] }) {
   }, [])
 
   useEffect(() => { loadBase() }, [loadBase])
+
+  useEffect(() => {
+    getIrm()
+      .then(r => {
+        const data = r.data || []
+        setIrmData(data)
+        if (data.length) setIrmTab(data[0].id)
+      })
+      .catch(e => console.error('IRM load error:', e))
+  }, [])
+
+  useEffect(() => {
+    getCkm()
+      .then(r => {
+        const data = Array.isArray(r.data) ? r.data : []
+        setCkmData(data)
+        if (data.length) setCkmTab(data[0].id)
+      })
+      .catch(e => console.error('CKM load error:', e))
+  }, [])
 
   useEffect(() => {
     const all = [...globalFilters, ...activeFilters]
@@ -873,7 +1125,7 @@ export default function Dashboard({ globalFilters = [] }) {
 
         {rightTab === 'migration' && <>
           <SectionTitle>Миграция по регионам</SectionTitle>
-          <MigrationTable data={base.migration} />
+          <MigrationChart data={base.migration} />
         </>}
       </Card>
 
@@ -897,6 +1149,38 @@ export default function Dashboard({ globalFilters = [] }) {
           <EduTable data={schoolData} dimKey="school" activeKeys={af} onToggle={toggleFilter} />
         </div>}
       </Card>
+
+      {/* IRM block */}
+      {irmData.length > 0 && (
+        <Card style={{ padding: '16px 20px', marginBottom: 12 }}>
+          <Tabs
+            tabs={irmData.map(d => ({ key: d.id, label: d.label }))}
+            active={irmTab}
+            onChange={setIrmTab}
+          />
+          <SectionTitle>
+            {irmTab === 'ИРМ'
+              ? 'Индекс развития молодёжи по регионам'
+              : `${irmTab} — индикаторы по регионам`}
+          </SectionTitle>
+          <IrmTable category={irmData.find(d => d.id === irmTab)} />
+        </Card>
+      )}
+
+      {/* CKM block */}
+      {Array.isArray(ckmData) && ckmData.length > 0 && (
+        <Card style={{ padding: '16px 20px', marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .6, color: 'var(--muted)', marginBottom: 14 }}>
+            ЦКМ
+          </div>
+          <Tabs
+            tabs={ckmData.map(d => ({ key: d.id, label: d.label }))}
+            active={ckmTab}
+            onChange={setCkmTab}
+          />
+          <CkmTable category={ckmData.find(d => d.id === ckmTab)} />
+        </Card>
+      )}
 
     </div>
   )

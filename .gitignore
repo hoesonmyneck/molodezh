@@ -13,6 +13,8 @@ venv/
 # Database & uploads (хранятся на сервере, не в git)
 backend/molodezh.db
 backend/uploads/
+backend/district_data/
+*.parquet
 
 # Node
 frontend/node_modules/

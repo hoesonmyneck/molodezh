@@ -1298,6 +1298,167 @@ def export_district(
     )
 
 
+# ── IRM (Индекс развития молодёжи) ────────────────────────────────────────────
+_IRM_FILES = [
+    ("ИРМ_итоговый.xlsx",       "ИРМ"),
+    ("Образование.xlsx",         "Образование"),
+    ("Здоровье.xlsx",            "Здоровье"),
+    ("Занятость.xlsx",           "Занятость"),
+    ("Гражданское участие.xlsx", "Гражданское участие"),
+    ("инф.досуг и спорт.xlsx",   "Инфраструктура"),
+    ("Безопасность.xlsx",        "Безопасность"),
+]
+
+
+_IRM_TABLE_DIR = None
+for _d in [
+    "/data/table",
+    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "table")),
+    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "table")),
+    os.path.normpath(os.path.join(os.getcwd(), "table")),
+    os.path.normpath(os.path.join(os.getcwd(), "..", "table")),
+    os.path.normpath(os.path.join(os.getcwd(), "..", "..", "table")),
+]:
+    if os.path.isdir(_d):
+        _IRM_TABLE_DIR = _d
+        break
+
+@app.get("/api/irm")
+async def get_irm(_: User = Depends(get_current_user)):
+    if not _IRM_TABLE_DIR:
+        return []
+    import pandas as _pd_irm
+    result = []
+    for filename, label in _IRM_FILES:
+        path = os.path.join(_IRM_TABLE_DIR, filename)
+        if not os.path.exists(path):
+            continue
+        try:
+            df = _pd_irm.read_excel(path, sheet_name=0).fillna(0)
+            result.append({
+                "id": label,
+                "label": label,
+                "columns": df.columns.tolist(),
+                "rows": df.values.tolist(),
+            })
+        except Exception:
+            pass
+    return result
+
+
+# ── ЦКМ (Национальный доклад) ─────────────────────────────────────────────────
+def _find_ckm_xlsx():
+    import glob as _g
+    search_dirs = [
+        os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")),
+        os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")),
+        os.path.normpath(os.path.join(os.getcwd(), "..")),
+        os.getcwd(),
+        os.path.normpath(os.path.join(os.getcwd(), "..", "..")),
+        "/data",
+    ]
+    for d in search_dirs:
+        for p in ["*ЦКМ*.xlsx", "*нац*доклад*.xlsx", "*CKM*.xlsx"]:
+            matches = _g.glob(os.path.join(d, p))
+            if matches:
+                return matches[0]
+    return None
+
+
+def _parse_ckm_xlsx(file_path):
+    import openpyxl as _xl
+    wb = _xl.load_workbook(file_path, data_only=True)
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    if len(all_rows) < 3:
+        return []
+
+    header_row = all_rows[0]
+    subhdr_row = all_rows[1]
+    data_rows = all_rows[2:]
+
+    merged_starts = {}
+    for rng in ws.merged_cells.ranges:
+        if rng.min_row == 1:
+            merged_starts[rng.min_col - 1] = rng.max_col - 1
+
+    single_cols = []
+    multi_groups = []
+
+    for ci, val in enumerate(header_row):
+        if ci == 0 or val is None:
+            continue
+        val_str = str(val).strip()
+        if not val_str:
+            continue
+        if ci in merged_starts:
+            end_ci = merged_starts[ci]
+            sub_headers = []
+            col_indices = []
+            for sub_ci in range(ci, end_ci + 1):
+                sv = subhdr_row[sub_ci] if sub_ci < len(subhdr_row) else None
+                if sv is not None:
+                    sub_headers.append(str(sv).strip())
+                    col_indices.append(sub_ci)
+            if sub_headers:
+                multi_groups.append({"label": val_str, "sub_headers": sub_headers, "col_indices": col_indices})
+        else:
+            single_cols.append((ci, val_str))
+
+    def clean_val(v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            if v.startswith('='):
+                return None
+            s = v.strip().replace('\xa0', '').replace(' ', '')
+            try:
+                return float(s.replace(',', '.'))
+            except Exception:
+                return s if s else None
+        return v
+
+    def build_rows(cidxs):
+        out = []
+        for row in data_rows:
+            region = row[0] if row else None
+            if region is None:
+                continue
+            vals = [str(region).strip()]
+            for ci in cidxs:
+                vals.append(clean_val(row[ci]) if ci < len(row) else None)
+            out.append(vals)
+        return out
+
+    result = []
+    if single_cols:
+        result.append({
+            "id": "single",
+            "label": "Общие показатели",
+            "columns": ["Регион"] + [n for _, n in single_cols],
+            "rows": build_rows([ci for ci, _ in single_cols]),
+        })
+    for g in multi_groups:
+        result.append({
+            "id": g["label"][:40],
+            "label": g["label"],
+            "columns": ["Регион"] + g["sub_headers"],
+            "rows": build_rows(g["col_indices"]),
+        })
+    return result
+
+
+@app.get("/api/ckm")
+async def get_ckm(_: User = Depends(get_current_user)):
+    f = _find_ckm_xlsx()
+    if not f:
+        return []
+    try:
+        return _parse_ckm_xlsx(f)
+    except Exception:
+        return []
+
+
 # ── Serve frontend build ───────────────────────────────────────────────────────
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.isdir(FRONTEND_DIST):

@@ -58,3 +58,6 @@ export const getFiltered = (filters) =>
   api.get('/data/filter', {
     params: new URLSearchParams(filters.map(({ dim, val }) => ['f', `${dim}:${val}`])),
   })
+
+export const getIrm = () => api.get('/irm')
+export const getCkm = () => api.get('/ckm')
