@@ -43,14 +43,14 @@ function KpiCard({ title, main, sub, subLabel, onSubClick, activeFilter }) {
       <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .5, marginBottom: 10 }}>
         {title}
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <span style={{ fontSize: 28, fontWeight: 700, color: TEAL, lineHeight: 1 }}>{fmt(main)}</span>
         {sub != null && (
           <div
             onClick={onSubClick}
             style={{
               lineHeight: 1.3, cursor: onSubClick ? 'pointer' : 'default',
-              padding: '2px 6px', borderRadius: 5,
+              padding: '2px 6px', borderRadius: 5, alignSelf: 'flex-start',
               background: activeFilter ? TEAL : 'transparent',
               transition: 'background .15s',
             }}
