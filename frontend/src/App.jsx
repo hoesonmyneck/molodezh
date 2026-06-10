@@ -365,7 +365,7 @@ export default function App() {
       <nav style={NAV}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--teal)', marginRight: 12 }}>
-            Молодежь РК
+            El Jastary
           </span>
           <NavBtn active={page === 'dashboard'} onClick={() => setPage('dashboard')}>
             Дашборд

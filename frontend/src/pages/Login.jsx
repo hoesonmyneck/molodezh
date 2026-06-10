@@ -31,7 +31,7 @@ export default function Login({ onLogin }) {
         width: 360, boxShadow: '0 20px 60px rgba(0,0,0,.2)',
       }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--teal)', marginBottom: 4 }}>
-          Молодежь РК
+          El Jastary
         </h1>
         <p style={{ color: 'var(--muted)', marginBottom: 32, fontSize: 13 }}>
           Система аналитики данных
