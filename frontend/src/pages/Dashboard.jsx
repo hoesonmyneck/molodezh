@@ -1171,7 +1171,7 @@ export default function Dashboard({ globalFilters = [] }) {
       {Array.isArray(ckmData) && ckmData.length > 0 && (
         <Card style={{ padding: '16px 20px', marginBottom: 12 }}>
           <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .6, color: 'var(--muted)', marginBottom: 14 }}>
-            ЦКМ
+            Национальный доклад
           </div>
           <Tabs
             tabs={ckmData.map(d => ({ key: d.id, label: d.label }))}

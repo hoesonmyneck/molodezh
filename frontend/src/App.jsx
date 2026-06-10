@@ -112,7 +112,7 @@ function GlobalFilterBar({ onChange }) {
       })
       if (!res.ok) { alert('Данные для экспорта не найдены. Переобработайте файлы.'); return }
       const { columns } = await res.json()
-      setExportModal({ columns, selected: new Set(columns) })
+      setExportModal({ columns, selected: new Set(columns.map(c => c.key)) })
     } catch { alert('Ошибка при получении списка полей') }
     finally { setExportLoading(false) }
   }
@@ -245,7 +245,7 @@ function GlobalFilterBar({ onChange }) {
 
             <div style={{ display: 'flex', gap: 8 }}>
               <button
-                onClick={() => setExportModal(prev => ({ ...prev, selected: new Set(prev.columns) }))}
+                onClick={() => setExportModal(prev => ({ ...prev, selected: new Set(prev.columns.map(c => c.key)) }))}
                 style={{ fontSize: 12, padding: '3px 10px', borderRadius: 5, border: '1px solid #d1d5db', cursor: 'pointer', background: '#f9fafb' }}
               >
                 Выбрать все
@@ -260,14 +260,14 @@ function GlobalFilterBar({ onChange }) {
 
             <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
               {exportModal.columns.map(col => (
-                <label key={col} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, padding: '3px 0' }}>
+                <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, padding: '3px 0' }}>
                   <input
                     type="checkbox"
-                    checked={exportModal.selected.has(col)}
-                    onChange={() => toggleCol(col)}
+                    checked={exportModal.selected.has(col.key)}
+                    onChange={() => toggleCol(col.key)}
                     style={{ accentColor: TEAL, width: 15, height: 15 }}
                   />
-                  {col}
+                  {col.label}
                 </label>
               ))}
             </div>

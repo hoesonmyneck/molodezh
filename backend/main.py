@@ -1213,6 +1213,66 @@ def get_nationality(db: Session = Depends(get_db), _: User = Depends(get_current
     return result
 
 
+# ── District export: hidden columns & Russian header names ────────────────────
+_EXPORT_HIDDEN_COLS = {
+    "DETID_DO_3LET", "STATUS_UNIQUE", "NKZ_CODE_LVL_1",
+    "OPV_ORG_BIN", "IDS", "KATO_REG", "KATO_RAI",
+}
+
+_EXPORT_COL_RU = {
+    "KATO_REGNAME":      "Регион",
+    "KATO_RAINAME":      "Район",
+    "SICID":             "SICID",
+    "GENDER":            "Пол",
+    "NATIONALTY":        "Национальность",
+    "CITIZENSHIP":       "Гражданство",
+    "VOZRAST":           "Возраст",
+    "TRUD_VOZRAST":      "Трудоспособный возраст",
+    "DETI_DO18":         "Дети до 18 лет",
+    "WORKING":           "Работающие",
+    "LSI":               "ЛСИ",
+    "ASP":               "Получатели АСП",
+    "RT_UNEMPLOYED":     "Безработные",
+    "STUDENT":           "Студент",
+    "PENSIONERS":        "Пенсионер",
+    "IP":                "ИП",
+    "KANDAS":            "Кандас",
+    "BEREM":             "Беременные",
+    "UHOD_INV":          "По уходу за инвалидом",
+    "FOREIGNERS":        "Иностранные граждане",
+    "MNOGODETNYI":       "Многодетные",
+    "WOMAN_UHOD_DO3":    "По уходу за ребёнком до 3 лет",
+    "CBD":               "Получатели пособий",
+    "UNREACHED_PEOPLE":  "Неохваченные",
+    "FAMILY_ID":         "ID семьи",
+    "FAMILY_TYPE":       "Тип семьи",
+    "SDU_THZS":          "Категоризация семьи",
+    "HAS_TD":            "Наличие трудового договора",
+    "NKZ_NAME_LVL_1":    "Сфера деятельности (НКЗ)",
+    "D_POSITION_CODE":   "Код должности",
+    "D_POSITION_NAME_RU": "Должность",
+    "ESTABLISHED_POST":  "Штатная должность",
+    "TERMINATION_DATE":  "Дата расторжения ТД",
+    "HAS_OPV":           "Наличие ОПВ",
+    "OPV_ORG_NAME":      "Организация-работодатель",
+    "CODE_OKED":         "Код ОКЭД",
+    "NAME_OKED":         "Вид деятельности (ОКЭД)",
+    "SMZ_3M":            "Средняя зарплата (3 мес.)",
+    "VUZ":               "ВУЗ",
+    "VUZ_NAME":          "Наименование ВУЗа",
+    "TIPO":              "ТиПО",
+    "TIPO_NAME":         "Наименование ТиПО",
+    "SCHOOL":            "Школа",
+    "SCHOOL_NAME":       "Наименование школы",
+    "IS_BERKUT":         "Выехавший по ИС Беркут",
+    "HAS_MIGRATE":       "Наличие миграции",
+    "A_KATO_REG":        "Код региона выбытия",
+    "A_KATO_REG_NAME":   "Регион выбытия",
+    "B_KATO_REG":        "Код региона прибытия",
+    "B_KATO_REG_NAME":   "Регион прибытия",
+}
+
+
 # ── District export: column list ──────────────────────────────────────────────
 @app.get("/api/data/export/district/columns")
 def export_district_columns(
@@ -1231,7 +1291,12 @@ def export_district_columns(
     try:
         import pyarrow.parquet as _pq2
         schema = _pq2.read_schema(_pq_files[0])
-        return {"columns": schema.names}
+        cols = [
+            {"key": n, "label": _EXPORT_COL_RU.get(n, n)}
+            for n in schema.names
+            if n not in _EXPORT_HIDDEN_COLS
+        ]
+        return {"columns": cols}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -1275,13 +1340,7 @@ def export_district(
 
     df_out = _pd.concat(dfs, ignore_index=True)
 
-    # ── filter columns if specified ───────────────────────────────────────────
-    if columns:
-        _cols = [c.strip() for c in columns.split(",") if c.strip() and c.strip() in df_out.columns]
-        if _cols:
-            df_out = df_out[_cols]
-
-    # ── get district name for filename ────────────────────────────────────────
+    # ── get district name for filename (from raw data, before filtering) ──────
     district_name = district
     for col in ("KATO_RAINAME", "RAINAME"):
         if col in df_out.columns:
@@ -1289,6 +1348,21 @@ def export_district(
             if len(vals):
                 district_name = str(vals.iloc[0]).strip()
                 break
+
+    # ── always drop hidden columns ────────────────────────────────────────────
+    df_out = df_out.drop(columns=[c for c in _EXPORT_HIDDEN_COLS if c in df_out.columns])
+
+    # ── filter columns if specified (hidden ones already removed) ─────────────
+    if columns:
+        _cols = [
+            c.strip() for c in columns.split(",")
+            if c.strip() and c.strip() in df_out.columns and c.strip() not in _EXPORT_HIDDEN_COLS
+        ]
+        if _cols:
+            df_out = df_out[_cols]
+
+    # ── rename headers to Russian ─────────────────────────────────────────────
+    df_out = df_out.rename(columns={c: _EXPORT_COL_RU[c] for c in df_out.columns if c in _EXPORT_COL_RU})
 
     # ── write to Excel ────────────────────────────────────────────────────────
     output = _io.BytesIO()
