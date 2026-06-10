@@ -21,7 +21,9 @@ def _emergency_cleanup():
         if os.path.isfile(_db_path):
             _c = _sq3.connect(_db_path, timeout=10, isolation_level=None)
             try:
-                _c.execute("PRAGMA integrity_check").fetchone()
+                # Lightweight probe: reading the schema fails instantly on a
+                # malformed DB without scanning the whole (possibly huge) file.
+                _c.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
                 _c.execute("PRAGMA journal_mode=WAL")
             except _sq3.DatabaseError:
                 _c.close()
@@ -1484,4 +1486,5 @@ if os.path.isdir(FRONTEND_DIST):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    _port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=_port, reload=False)
