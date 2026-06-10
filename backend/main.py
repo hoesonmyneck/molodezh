@@ -469,8 +469,6 @@ def cleanup_db(db: Session = Depends(get_db), _: User = Depends(require_admin)):
 
         active_id = get_active_session_id(db)
         db_size_before = os.path.getsize(DB_PATH) if os.path.isfile(DB_PATH) else 0
-        db.close()
-        engine.dispose()
     except HTTPException:
         _cleanup_lock.release()
         raise
