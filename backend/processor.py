@@ -108,8 +108,27 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
 
     total_files = len(file_paths)
 
-    # Parquet export disabled — Excel download feature removed to save disk space
-    _pq_base = None
+    # ── Parquet export setup ──────────────────────────────────────────────────
+    # Delete parquet dirs from all OTHER sessions before writing new ones
+    try:
+        import shutil as _shutil
+        _dd = os.path.join(_DATA_DIR, "district_data")
+        if os.path.isdir(_dd):
+            for _sd in os.listdir(_dd):
+                if _sd != str(session_id):
+                    try:
+                        _shutil.rmtree(os.path.join(_dd, _sd), ignore_errors=True)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    _pq_base = os.path.join(_DATA_DIR, "district_data", str(session_id))
+    if _PQ_OK:
+        try:
+            os.makedirs(_pq_base, exist_ok=True)
+        except Exception:
+            pass
 
     # MicroAgg: core dims only — okved/nationality live in separate tables
     _DIM_COLS = [
@@ -156,6 +175,7 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
         nat_chunks: list = []
         nkz_chunks: list = []
         edu_chunks: list = []
+        _pq_writers_file: dict = {}   # district_code → ParquetWriter (per source file)
         file_name = os.path.basename(file_path)
         _update(db, session_id, int(file_idx / total_files * 85), file_name)
 
@@ -445,8 +465,32 @@ def process_excel_files(session_id: int, file_paths: list, db: Session):
                     if ename_k:
                         edu_counts[(etype_k, ename_k)] += int(cnt)
 
+            # ── Save raw rows per district for Excel export ───────────────────
+            if _PQ_OK and "KATO_RAI" in df.columns:
+                try:
+                    _df_str = df.fillna('').astype(str)
+                    for _dc_raw, _grp in _df_str.groupby("KATO_RAI"):
+                        _dc = str(_dc_raw).strip()
+                        if not _dc or _dc in ('nan', 'None', ''):
+                            continue
+                        _tbl = _pa.Table.from_pandas(
+                            _grp.reset_index(drop=True), preserve_index=False
+                        )
+                        if _dc not in _pq_writers_file:
+                            _dc_dir = os.path.join(_pq_base, _dc)
+                            os.makedirs(_dc_dir, exist_ok=True)
+                            _pq_path = os.path.join(_dc_dir, f"{file_idx}.parquet")
+                            _pq_writers_file[_dc] = _pq.ParquetWriter(_pq_path, _tbl.schema)
+                        _pq_writers_file[_dc].write_table(_tbl)
+                except Exception:
+                    pass
 
             del df, rec_df  # free each chunk immediately before the next
+
+        # Close parquet writers for this file
+        for _w in _pq_writers_file.values():
+            try: _w.close()
+            except: pass
 
         # ── Insert this file's agg rows immediately; free RAM before next file ─
         def _insert_agg(chunks, dim_cols, agg_spec, Model):

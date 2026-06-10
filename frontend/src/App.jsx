@@ -213,6 +213,20 @@ function GlobalFilterBar({ onChange }) {
         </button>
       )}
 
+      {sel.region && sel.district && (
+        <button
+          onClick={openExportModal}
+          disabled={exportLoading}
+          style={{
+            background: TEAL, border: 'none', color: '#fff',
+            fontSize: 12, fontWeight: 600, cursor: exportLoading ? 'default' : 'pointer',
+            padding: '4px 12px', borderRadius: 6, opacity: exportLoading ? 0.7 : 1,
+          }}
+        >
+          {exportLoading ? 'Загрузка…' : 'Скачать Excel'}
+        </button>
+      )}
+
       {exportModal && (
         <div style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)',
