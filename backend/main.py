@@ -14,15 +14,21 @@ def _emergency_cleanup():
                 os.makedirs(upload_dir, exist_ok=True)
     except Exception:
         pass
-    # Restore WAL journal mode in case a prior operation switched it to MEMORY/OFF.
-    # Must run before SQLAlchemy initialises so all pool connections see WAL from the start.
+    # Check DB integrity; delete if corrupted so SQLAlchemy can create a fresh one.
     try:
         import sqlite3 as _sq3
         _db_path = "/data/molodezh.db"
         if os.path.isfile(_db_path):
             _c = _sq3.connect(_db_path, timeout=10, isolation_level=None)
-            _c.execute("PRAGMA journal_mode=WAL")
-            _c.close()
+            try:
+                _c.execute("PRAGMA integrity_check").fetchone()
+                _c.execute("PRAGMA journal_mode=WAL")
+            except _sq3.DatabaseError:
+                _c.close()
+                os.remove(_db_path)
+                print("[STARTUP] Corrupted DB detected and removed — will recreate on init.")
+            else:
+                _c.close()
     except Exception:
         pass
 
