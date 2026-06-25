@@ -364,9 +364,11 @@ export default function App() {
     <div style={{ minHeight: '100vh' }}>
       <nav style={NAV}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--teal)', marginRight: 12 }}>
-            El Jastary
-          </span>
+          <img
+  src="/jastar-logo.jpg"
+  alt="Jastar"
+  style={{ height: 42, marginRight: 12 }}
+/>
           <NavBtn active={page === 'dashboard'} onClick={() => setPage('dashboard')}>
             Дашборд
           </NavBtn>
