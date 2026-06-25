@@ -965,69 +965,161 @@ export default function Dashboard({ globalFilters = [] }) {
 
   return (
     <div>
-      <FilterBanner filters={af} onRemove={removeFilter} onClear={clearFilters} />
-      {loading && <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>Загрузка данных...</div>}
+  <FilterBanner filters={af} onRemove={removeFilter} onClear={clearFilters} />
+  {loading && (
+    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+      Загрузка данных...
+    </div>
+  )}
+<Card
+  style={{
+    padding: '18px 24px',
+    marginBottom: 16,
+    background: '#ffffff',
+    borderRadius: 10,
+    textAlign: 'center',
+    boxShadow: '0 1px 4px rgba(0,0,0,0.08)'
+  }}
+>
+  <div
+    style={{
+      fontSize: 15,
+      color: '#666',
+      fontWeight: 600
+    }}
+  >
+    Население Республики Казахстан
+  </div>
 
-      {/* KPIs */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <KpiCard title="Количество ФЛ" main={kpis?.total_persons} />
-        <KpiCard title="Работающие" main={kpis?.working} sub={kpis?.active_contracts} subLabel="Активный ТД"
-          onSubClick={() => toggleFilter('status', 'АКТИВНЫЙ ТД')}
-          activeFilter={af.some(f => f.dim === 'status' && f.val === 'АКТИВНЫЙ ТД')} />
-        <KpiCard title="Средняя ЗП" main={kpis?.avg_salary} />
-        <KpiCard title="ВУЗ" main={kpis?.students} />
-        <KpiCard title="ТИПО" main={kpis?.tipo_count}
-          onSubClick={() => toggleFilter('status', 'ТИПО')}
-          activeFilter={af.some(f => f.dim === 'status' && f.val === 'ТИПО')} />
-        <KpiCard
-          title="Средний возраст"
-          main={kpis?.avg_age != null ? Math.round(kpis.avg_age) : null}
-          sub={kpis?.median_age != null ? Math.round(kpis.median_age) : null}
-          subLabel="Медианный возраст"
+  <div
+    style={{
+      fontSize: 42,
+      fontWeight: 700,
+      color: '#147a80',
+      marginTop: 8
+    }}
+  >
+    20 562 993
+  </div>
+
+  <div
+    style={{
+      fontSize: 13,
+      color: '#999',
+      marginTop: 4
+    }}
+  >
+    человек
+  </div>
+</Card>
+
+{/* KPIs */}
+<div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+  
+
+    <KpiCard
+      title="Количество ФЛ"
+      main={kpis?.total_persons}
+    />
+
+    <KpiCard
+      title="Работающие"
+      main={kpis?.working}
+      sub={kpis?.active_contracts}
+      subLabel="Активный ТД"
+      onSubClick={() => toggleFilter('status', 'АКТИВНЫЙ ТД')}
+      activeFilter={af.some(f => f.dim === 'status' && f.val === 'АКТИВНЫЙ ТД')}
+    />
+
+    <KpiCard
+      title="Средняя ЗП"
+      main={kpis?.avg_salary}
+    />
+
+    <KpiCard
+      title="ВУЗ"
+      main={kpis?.students}
+    />
+
+    <KpiCard
+      title="ТИПО"
+      main={kpis?.tipo_count}
+      onSubClick={() => toggleFilter('status', 'ТИПО')}
+      activeFilter={af.some(f => f.dim === 'status' && f.val === 'ТИПО')}
+    />
+
+    <KpiCard
+      title="Средний возраст"
+      main={kpis?.avg_age != null ? Math.round(kpis.avg_age) : null}
+      sub={kpis?.median_age != null ? Math.round(kpis.median_age) : null}
+      subLabel="Медианный возраст"
+    />
+  </div>
+
+  {/* Main panels */}
+  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+    <Card style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column' }}>
+      <Tabs
+        tabs={[
+          { key: 'statuses', label: 'Статусы' },
+          { key: 'regions', label: 'Регионы' },
+          { key: 'okved', label: 'ОКЭД' },
+          { key: 'nkz', label: 'НКЗ' },
+          { key: 'nationality', label: 'Национальность' },
+        ]}
+        active={leftTab}
+        onChange={setLeftTab}
+      />
+
+      {leftTab === 'statuses' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>Рейтинг статусов — нажмите для фильтрации</SectionTitle>
+          <StatusChart data={statuses} activeKeys={af} onToggle={toggleFilter} />
+        </div>
+      )}
+
+      {leftTab === 'regions' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>Регионы — нажмите для фильтрации</SectionTitle>
+          <RegionTable data={regions} activeKeys={af} onToggle={toggleFilter} />
+        </div>
+      )}
+
+      {leftTab === 'okved' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>ОКЭД — нажмите для фильтрации</SectionTitle>
+          <OkvedChart data={okved} activeKeys={af} dimKey="okved" onToggle={toggleFilter} />
+        </div>
+      )}
+
+      {leftTab === 'nkz' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>НКЗ — нажмите для фильтрации</SectionTitle>
+          <OkvedChart data={nkz} activeKeys={af} dimKey="nkz" onToggle={toggleFilter} />
+        </div>
+      )}
+
+      {leftTab === 'nationality' && (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <SectionTitle>Национальность — нажмите для фильтрации</SectionTitle>
+          <NationalityTable data={nationality} activeKeys={af} onToggle={toggleFilter} />
+        </div>
+      )}
+    </Card>
+
+    <Card style={{ padding: '16px 20px' }}>
+      <SectionTitle>Карта регионов — нажмите для фильтрации</SectionTitle>
+
+      <div style={{ position: 'relative', zIndex: 0, marginTop: 70 }}>
+        <KazakhstanMap
+          regions={regions}
+          activeKeys={af}
+          onToggle={toggleFilter}
         />
       </div>
-
-      {/* Main panels */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-        <Card style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column' }}>
-          <Tabs tabs={[
-            { key: 'statuses', label: 'Статусы' },
-            { key: 'regions', label: 'Регионы' },
-            { key: 'okved', label: 'ОКЭД' },
-            { key: 'nkz', label: 'НКЗ' },
-            { key: 'nationality', label: 'Национальность' },
-          ]} active={leftTab} onChange={setLeftTab} />
-
-          {leftTab === 'statuses' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <SectionTitle>Рейтинг статусов — нажмите для фильтрации</SectionTitle>
-            <StatusChart data={statuses} activeKeys={af} onToggle={toggleFilter} />
-          </div>}
-          {leftTab === 'regions' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <SectionTitle>Регионы — нажмите для фильтрации</SectionTitle>
-            <RegionTable data={regions} activeKeys={af} onToggle={toggleFilter} />
-          </div>}
-          {leftTab === 'okved' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <SectionTitle>ОКЭД  — нажмите для фильтрации</SectionTitle>
-            <OkvedChart data={okved} activeKeys={af} dimKey="okved" onToggle={toggleFilter} />
-          </div>}
-          {leftTab === 'nkz' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <SectionTitle>НКЗ  — нажмите для фильтрации</SectionTitle>
-            <OkvedChart data={nkz} activeKeys={af} dimKey="nkz" onToggle={toggleFilter} />
-          </div>}
-          {leftTab === 'nationality' && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <SectionTitle>Национальность  — нажмите для фильтрации</SectionTitle>
-            <NationalityTable data={nationality} activeKeys={af} onToggle={toggleFilter} />
-          </div>}
-        </Card>
-
-        <Card style={{ padding: '16px 20px' }}>
-          <SectionTitle>Карта регионов — нажмите для фильтрации</SectionTitle>
-          {/* position:relative + zIndex:0 — stacking context, чтобы z-index Leaflet не перекрывал фикс. меню */}
-          <div style={{ position: 'relative', zIndex: 0, marginTop: 70}}>
-            <KazakhstanMap regions={regions} activeKeys={af} onToggle={toggleFilter} />
-          </div>
-        </Card>
-      </div>
+    </Card>
+  </div>
+</div>
 
       {/* Age / Gender / Family type / Cat / Regions / Migration */}
       <Card style={{ padding: '16px 20px', marginBottom: 12, display: 'flex', flexDirection: 'column' }}>
