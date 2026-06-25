@@ -364,12 +364,13 @@ export default function App() {
     <div style={{ minHeight: '100vh' }}>
       <nav style={NAV}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img src="/https://eljastary.kz/wp-content/uploads/2026/02/logo-1.jpg"
+          <img
+  src="https://eljastary.kz/wp-content/uploads/2026/02/logo-1.jpg"
   alt="Jastar"
   style={{ height: 42, marginRight: 12 }}
 />
           <NavBtn active={page === 'dashboard'} onClick={() => setPage('dashboard')}>
-            Дашборд
+            Дашборд KZ
           </NavBtn>
           {user.is_admin && (
             <NavBtn active={page === 'admin'} onClick={() => setPage('admin')}>
