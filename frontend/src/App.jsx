@@ -365,7 +365,7 @@ export default function App() {
       <nav style={NAV}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <img
-  src="/jastar-logo.jpg"
+  src="/logo-1.jpg"
   alt="Jastar"
   style={{ height: 42, marginRight: 12 }}
 />
