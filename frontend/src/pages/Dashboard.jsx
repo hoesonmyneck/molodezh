@@ -990,7 +990,6 @@ export default function Dashboard({ globalFilters = [] }) {
   >
     Население Республики Казахстан
   </div>
-
   <div
     style={{
       fontSize: 42,
@@ -1001,7 +1000,6 @@ export default function Dashboard({ globalFilters = [] }) {
   >
     20 562 993
   </div>
-
   <div
     style={{
       fontSize: 13,
@@ -1012,16 +1010,12 @@ export default function Dashboard({ globalFilters = [] }) {
     человек
   </div>
 </Card>
-
 {/* KPIs */}
 <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-  
-
     <KpiCard
       title="Количество ФЛ"
       main={kpis?.total_persons}
     />
-
     <KpiCard
       title="Работающие"
       main={kpis?.working}
@@ -1030,24 +1024,20 @@ export default function Dashboard({ globalFilters = [] }) {
       onSubClick={() => toggleFilter('status', 'АКТИВНЫЙ ТД')}
       activeFilter={af.some(f => f.dim === 'status' && f.val === 'АКТИВНЫЙ ТД')}
     />
-
     <KpiCard
       title="Средняя ЗП"
       main={kpis?.avg_salary}
     />
-
     <KpiCard
       title="ВУЗ"
       main={kpis?.students}
     />
-
     <KpiCard
       title="ТИПО"
       main={kpis?.tipo_count}
       onSubClick={() => toggleFilter('status', 'ТИПО')}
       activeFilter={af.some(f => f.dim === 'status' && f.val === 'ТИПО')}
     />
-
     <KpiCard
       title="Средний возраст"
       main={kpis?.avg_age != null ? Math.round(kpis.avg_age) : null}
@@ -1055,7 +1045,6 @@ export default function Dashboard({ globalFilters = [] }) {
       subLabel="Медианный возраст"
     />
   </div>
-
   {/* Main panels */}
   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
     <Card style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column' }}>
@@ -1119,8 +1108,6 @@ export default function Dashboard({ globalFilters = [] }) {
       </div>
     </Card>
   </div>
-</div>
-
       {/* Age / Gender / Family type / Cat / Regions / Migration */}
       <Card style={{ padding: '16px 20px', marginBottom: 12, display: 'flex', flexDirection: 'column' }}>
         <Tabs tabs={[
