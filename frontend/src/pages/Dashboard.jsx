@@ -1051,7 +1051,7 @@ export default function Dashboard({ globalFilters = [] }) {
         textAlign: 'center'
       }}
     >
-      📘 Полный аналитический отчет
+      📘 Инфографика «Молодежь Казахстана – 2026
     </a>
   </div>
 </Card>
