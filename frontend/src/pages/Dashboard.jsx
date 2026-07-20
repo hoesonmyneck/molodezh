@@ -1010,6 +1010,51 @@ export default function Dashboard({ globalFilters = [] }) {
     человек
   </div>
 </Card>
+<Card style={{ padding: '18px 24px', marginBottom: 16 }}>
+  <h3 style={{ marginTop: 0, color: '#147a80' }}>
+    Социологическое исследование «Молодежь Казахстана – 2025»
+  </h3>
+
+  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+    <a
+      href="https://drive.google.com/file/d/1_w_DTNDXqzcjGT5_qpViKX3H2z3IqOE4/view?usp=sharing"
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        flex: 1,
+        minWidth: 280,
+        textDecoration: 'none',
+        background: '#e6f4f5',
+        color: '#147a80',
+        padding: 20,
+        borderRadius: 10,
+        fontWeight: 600,
+        textAlign: 'center'
+      }}
+    >
+      📊 Инфографика «Молодежь Казахстана – 2025»
+    </a>
+
+    <a
+      href="https://drive.google.com/file/d/1Fc8aai5Sn4CTmcQEltC3zXpb6rYtSqki/view?usp=sharing"
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        flex: 1,
+        minWidth: 280,
+        textDecoration: 'none',
+        background: '#e6f4f5',
+        color: '#147a80',
+        padding: 20,
+        borderRadius: 10,
+        fontWeight: 600,
+        textAlign: 'center'
+      }}
+    >
+      📘 Полный аналитический отчет
+    </a>
+  </div>
+</Card>
 {/* KPIs */}
 <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
     <KpiCard
